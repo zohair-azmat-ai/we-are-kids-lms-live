@@ -1,194 +1,173 @@
 <div align="center">
 
+<img src="./frontend/public/images/logo.png" alt="We Are Kids Nursery Logo" width="140" />
+
 # We Are Kids Nursery — LMS + Live Class System
 
-### A production-style Learning Management System and live classroom platform built for nurseries and schools
+**A production-level nursery LMS and live classroom platform for modern schools.**
 
-[![Next.js](https://img.shields.io/badge/Next.js-15-black?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.110-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
-[![WebRTC](https://img.shields.io/badge/WebRTC-Live_Classes-FF6B35?style=for-the-badge&logo=webrtc&logoColor=white)](https://webrtc.org)
+<br />
 
-[![Vercel](https://img.shields.io/badge/Vercel-Frontend-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://vercel.com)
-[![Hugging Face](https://img.shields.io/badge/Hugging_Face-Backend-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black)](https://huggingface.co/spaces)
-[![MVP Ready](https://img.shields.io/badge/Status-MVP_Ready-22C55E?style=for-the-badge)](.)
-[![Deployment Ready](https://img.shields.io/badge/Deploy-Ready-6366F1?style=for-the-badge)](.)
+![Next.js](https://img.shields.io/badge/Next.js-14-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-00C7B7?style=for-the-badge&logo=fastapi&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3.4-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)
+![WebRTC](https://img.shields.io/badge/WebRTC-Real_Time-F04D3D?style=for-the-badge&logo=webrtc&logoColor=white)
+
+![Vercel](https://img.shields.io/badge/Vercel-Frontend-111111?style=for-the-badge&logo=vercel&logoColor=white)
+![Hugging Face Spaces](https://img.shields.io/badge/Hugging_Face_Spaces-Backend-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black)
+![MVP Ready](https://img.shields.io/badge/MVP-Ready-8B5CF6?style=for-the-badge)
+![Deployment Ready](https://img.shields.io/badge/Deployment-Ready-16A34A?style=for-the-badge)
 
 </div>
 
 ---
 
-## About
+## Overview
 
-**We Are Kids** is a full-stack, production-ready Learning Management System designed specifically for nurseries and primary schools. It combines role-based dashboards, a live video classroom powered by WebRTC, an automated recording system, and a comprehensive admin panel — all wrapped in a child-friendly, responsive interface.
+We Are Kids Nursery is a polished full-stack LMS and live classroom system built to showcase a modern nursery-school product experience. It combines role-based dashboards, live WebRTC classes, recording workflows, expiry automation, and admin management inside a responsive nursery-branded interface.
 
-Built with **Next.js + FastAPI**, this project is deployable in minutes on Vercel and Hugging Face Spaces.
+This repository is designed to feel demo-ready, recruiter-impressive, and startup-grade while still staying technically meaningful and easy to deploy.
 
----
+## Key Features
+
+- Role-based dashboards for `Admin`, `Teacher`, and `Student`
+- Real-time live class sessions using `WebRTC`
+- WebSocket signaling workflow for classroom peer connection setup
+- Recording upload, playback, rename, delete, and 5-day auto-expiry
+- Admin control panel for teachers, students, classes, live sessions, and recordings
+- Mobile-responsive nursery-branded UI with polished empty, loading, and error states
+- Deployment-ready structure for `Vercel` frontend and `Hugging Face Spaces` backend
 
 ## Project Metrics
 
 | Metric | Value |
-|--------|-------|
-| User Roles | 3 (Admin, Teacher, Student) |
-| Live Classroom | WebRTC peer-to-peer video |
-| Signaling | WebSocket-based |
-| Recording Retention | 5-day auto-delete |
-| Admin Modules | Teachers · Students · Classes · Live Sessions · Recordings |
-| API Endpoints | 9+ REST endpoints |
-| Responsive Pages | Full mobile & desktop support |
-| Deployment Targets | Vercel + Hugging Face Spaces |
-
----
-
-## Features
-
-### LMS Core
-- Role-based dashboards for **Admin**, **Teacher**, and **Student**
-- Secure login and session management per role
-- Class management with structured listing and status tracking
-
-### Live Classes
-- Real-time video classrooms powered by **WebRTC**
-- **WebSocket** signaling server for peer connection negotiation
-- Teacher-initiated live sessions with student join flow
-- Live session status visible across all dashboards
-
-### Recording System
-- In-browser classroom recording with upload to backend
-- Recordings stored locally in the backend upload directory
-- **Auto-delete after 5 days** to manage storage automatically
-- Recording history accessible from Admin and Teacher dashboards
-
-### Admin Panel
-- Full management of **teachers**, **students**, **classes**, **live sessions**, and **recordings**
-- Quick-access views for all active and historical data
-- Dashboard metrics for at-a-glance oversight
-
-### UI / UX
-- Nursery-branded, child-friendly interface
-- Tailwind CSS with a clean, colourful design system
-- Production-quality loading states, error boundaries, and fallback messages
-- Responsive layout for desktop and mobile devices
-
----
+|---|---|
+| User Roles | `3 Core Roles` |
+| Live Experience | `Real-Time Classroom Sessions` |
+| Video Layer | `WebRTC Peer Calling` |
+| Signaling Layer | `WebSocket Classroom Signaling` |
+| Recording Lifecycle | `Upload + Playback + 5-Day Expiry` |
+| Admin Modules | `Teachers • Students • Classes • Live Sessions • Recordings` |
+| Interface Quality | `Nursery-Branded Responsive UI` |
+| Deployment Target | `Vercel + Hugging Face Spaces` |
 
 ## Architecture
 
+The platform uses a clean two-tier architecture:
+
+- The `Next.js frontend` delivers the homepage, authentication flow, dashboards, classroom views, playback pages, and admin control interfaces.
+- The `FastAPI backend` handles REST APIs, admin CRUD endpoints, recording workflows, local upload storage, and classroom signaling.
+- The `WebRTC layer` enables direct media exchange between teacher and students after signaling completes.
+- The `recording subsystem` stores uploaded class recordings locally and automatically removes expired recordings after five days.
+- The `admin layer` centralizes management across teachers, students, classes, live sessions, and recordings.
+
+## Mermaid Architecture Diagram
+
+```mermaid
+flowchart LR
+    subgraph Users[User Roles]
+        A[Admin]
+        T[Teacher]
+        S[Student]
+        P[Parent / Guardian]
+    end
+
+    subgraph Frontend[Next.js Frontend]
+        HP[Homepage + Login]
+        DB[Dashboards]
+        CL[Classroom UI]
+        RP[Recordings Pages]
+        AU[Admin Control UI]
+    end
+
+    subgraph Backend[FastAPI Backend]
+        API[REST API Layer]
+        WS[WebSocket Signaling]
+        RS[Recording Service]
+        AD[Admin Management Service]
+    end
+
+    subgraph Realtime[Realtime Classroom]
+        RTC[WebRTC Peer Connections]
+    end
+
+    subgraph Storage[Storage]
+        UP[Local Upload Storage]
+        MEM[In-Memory Admin + Session State]
+    end
+
+    A --> HP
+    T --> HP
+    S --> HP
+    P --> HP
+
+    HP --> DB
+    DB --> CL
+    DB --> RP
+    DB --> AU
+
+    CL --> API
+    CL --> WS
+    RP --> API
+    AU --> API
+
+    WS --> RTC
+    T --> RTC
+    S --> RTC
+
+    API --> RS
+    API --> AD
+    RS --> UP
+    AD --> MEM
+    API --> MEM
 ```
-┌─────────────────────────────────────────────────────────┐
-│                      Frontend                           │
-│               Next.js 15 + TypeScript                   │
-│             Tailwind CSS · App Router                   │
-└────────────────────┬────────────────────────────────────┘
-                     │ REST API  /  WebSocket
-┌────────────────────▼────────────────────────────────────┐
-│                      Backend                            │
-│                FastAPI (Python)                         │
-│       Auth · Classes · Recordings · Admin API           │
-└────────────┬───────────────────────┬────────────────────┘
-             │                       │
-  ┌──────────▼──────┐     ┌──────────▼──────────┐
-  │  WebSocket      │     │  Local File Storage  │
-  │  Signaling      │     │  (Recordings)        │
-  └──────────┬──────┘     └─────────────────────┘
-             │
-  ┌──────────▼──────┐
-  │  WebRTC         │
-  │  Peer-to-Peer   │
-  │  Live Classroom │
-  └─────────────────┘
 
-Deployment:
-  Frontend → Vercel
-  Backend  → Hugging Face Spaces (Docker)
-```
-
----
-
-## Architecture Diagram
+## User Flow
 
 ```mermaid
 flowchart TD
-    A([User: Admin / Teacher / Student]) --> B[Next.js Frontend\nVercel]
+    U[User Opens Platform] --> L[Login by Role]
+    L --> AD[Admin Dashboard]
+    L --> TD[Teacher Dashboard]
+    L --> SD[Student Dashboard]
 
-    B -->|REST API| C[FastAPI Backend\nHugging Face Spaces]
-    B -->|WebSocket| D[WebSocket Signaling Server]
+    TD --> SLC[Start Live Class]
+    SLC --> SIG[WebSocket Signaling]
+    SIG --> RTC[WebRTC Classroom]
+    RTC --> REC[Record Class Session]
+    REC --> UP[Upload Recording]
+    UP --> EXP[Auto Expiry After 5 Days]
 
-    D -->|SDP + ICE Exchange| E[WebRTC Live Classroom\nPeer-to-Peer Video]
+    SD --> JLC[Join Live Class]
+    JLC --> RTC
+    SD --> WRP[Watch Recording Playback]
 
-    C --> F[(Local File Storage\nRecordings)]
-    C --> G[Admin API\nTeachers · Students · Classes]
-
-    F -->|Auto-Delete after 5 days| F
-
-    subgraph Frontend
-        B
-    end
-
-    subgraph Backend
-        C
-        D
-        F
-        G
-    end
-
-    subgraph Live Video
-        E
-    end
+    AD --> MT[Manage Teachers]
+    AD --> MS[Manage Students]
+    AD --> MC[Manage Classes]
+    AD --> MLS[Monitor Live Sessions]
+    AD --> MR[Manage Recordings]
 ```
-
----
-
-## Project Flow
-
-```
-Admin / Teacher / Student
-        │
-        ▼
-   Login Page
-        │
-        ▼
- Role-Based Dashboard
-        │
-   ┌────┴────┐
-   │         │
-   ▼         ▼
-Classes   Live Session
-              │
-              ▼
-        WebRTC Classroom
-              │
-              ▼
-         Recording
-              │
-              ▼
-     Auto-Expiry (5 days)
-```
-
----
 
 ## Tech Stack
 
 | Layer | Technology |
-|-------|-----------|
-| Frontend Framework | Next.js 15 (App Router) |
-| Language | TypeScript |
-| Styling | Tailwind CSS |
-| Backend Framework | FastAPI (Python) |
-| Realtime Video | WebRTC |
-| Realtime Signaling | WebSockets |
-| Frontend Deployment | Vercel |
-| Backend Deployment | Hugging Face Spaces (Docker) |
-
----
+|---|---|
+| Frontend | `Next.js` |
+| Language | `TypeScript` |
+| Styling | `Tailwind CSS` |
+| Backend | `FastAPI` |
+| Realtime Video | `WebRTC` |
+| Signaling | `WebSockets` |
+| Frontend Hosting | `Vercel` |
+| Backend Hosting | `Hugging Face Spaces` |
 
 ## Local Setup
 
 ### Backend
 
-```bash
+```powershell
 cd backend
 python -m venv .venv
 .venv\Scripts\activate
@@ -199,14 +178,12 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 ### Frontend
 
-```bash
+```powershell
 cd frontend
 copy .env.example .env.local
 npm install
 npm run dev
 ```
-
----
 
 ## Environment Variables
 
@@ -224,42 +201,45 @@ UPLOAD_DIR=uploads
 CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ```
 
----
-
 ## Deployment
 
 ### Frontend on Vercel
 
 1. Push the repository to GitHub.
-2. Import the `frontend/` folder into a new Vercel project.
-3. Set the environment variable:
-   ```
-   NEXT_PUBLIC_API_BASE_URL=https://your-huggingface-space-url
-   ```
-4. Deploy — Vercel handles the build automatically.
+2. Import the project into Vercel.
+3. Set `NEXT_PUBLIC_API_BASE_URL` to your deployed backend URL from Hugging Face Spaces.
+4. Deploy the production build.
 
 ### Backend on Hugging Face Spaces
 
-1. Create a new Hugging Face Space using the **Docker** SDK.
-2. Upload the contents of the `backend/` folder to the Space.
-3. The included `Dockerfile` allows Hugging Face to build the FastAPI service automatically.
-4. Set Space variables:
-   ```
-   PORT=8000
-   UPLOAD_DIR=uploads
-   CORS_ORIGINS=https://your-vercel-domain.vercel.app
-   ```
-5. Deploy the Space and copy its public URL.
-6. Add that URL as `NEXT_PUBLIC_API_BASE_URL` in your Vercel project settings.
+1. Create a new Space using the `Docker` SDK.
+2. Upload the contents of the `backend/` folder.
+3. Keep the included `Dockerfile` in place.
+4. Configure the Space variables:
+   - `PORT=8000`
+   - `UPLOAD_DIR=uploads`
+   - `CORS_ORIGINS=https://your-vercel-domain.vercel.app`
+5. Deploy the Space.
+6. Copy the public Space URL into Vercel as `NEXT_PUBLIC_API_BASE_URL`.
 
----
+### Production Commands
 
-## Demo Login Credentials
+Backend:
 
-> Use these credentials to explore the platform without registration.
+```powershell
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Frontend:
+
+```powershell
+npm run build
+```
+
+## Demo Credentials
 
 | Role | Email | Password |
-|------|-------|----------|
+|---|---|---|
 | Admin | `admin@wearekids.com` | `123456` |
 | Teacher 1 | `teacher1@wearekids.com` | `123456` |
 | Teacher 2 | `teacher2@wearekids.com` | `123456` |
@@ -268,81 +248,56 @@ CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 | Student 3 | `student3@wearekids.com` | `123456` |
 | Student 4 | `student4@wearekids.com` | `123456` |
 
----
-
 ## API Highlights
 
 ```http
 GET    /health
+
 GET    /api/v1/classes/live
 POST   /api/v1/classes/start
+
 POST   /api/v1/recordings/upload
 GET    /api/v1/recordings
+GET    /api/v1/recordings/{recording_id}
+PATCH  /api/v1/recordings/{recording_id}
+DELETE /api/v1/recordings/{recording_id}
+
 GET    /api/v1/admin/teachers
 GET    /api/v1/admin/students
 GET    /api/v1/admin/classes
 GET    /api/v1/admin/live-sessions
 ```
 
----
+## Build Validation
 
-## Build & Validation
+Backend:
 
-**Backend syntax check:**
-
-```bash
+```powershell
 python -m compileall backend
 ```
 
-**Frontend type-check and build:**
+Frontend:
 
-```bash
+```powershell
 cd frontend
 npm run type-check
 npm run build
 ```
 
----
-
 ## Future Improvements
 
-- JWT-based authentication with refresh tokens
-- PostgreSQL or Supabase for persistent data storage
-- Cloud storage (S3 / Cloudflare R2) for recordings
-- Push notifications for live session alerts
-- Parent portal with child progress tracking
-- Attendance tracking and reporting
-- Multi-language support for international schools
-
----
-
-## Project Structure
-
-```text
-school-lms-live/
-├── backend/          # FastAPI application
-│   ├── app/
-│   ├── Dockerfile
-│   └── requirements.txt
-├── frontend/         # Next.js application
-│   ├── app/
-│   ├── components/
-│   └── public/
-└── README.md
-```
-
----
-
-## Notes
-
-- This project currently uses in-memory data for admin, class, and live-session records.
-- Recordings are stored locally in the backend upload directory.
-- If the backend is unreachable or the API URL is missing, the frontend displays a friendly fallback message rather than failing silently.
+- Persistent database for users, classes, sessions, and recordings
+- Secure authentication with refresh tokens
+- Cloud object storage for recordings
+- Attendance tracking and live chat
+- Parent portal and reporting workflows
+- Analytics dashboards and school-level insights
+- Native mobile companion apps
 
 ---
 
 <div align="center">
 
-Built with care for nurseries and schools — **We Are Kids**
+Built with care for nursery education, live learning, and modern product presentation.
 
 </div>
