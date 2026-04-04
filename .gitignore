@@ -1,0 +1,14 @@
+.next/
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+.env
+.env.local
+backend/.env
+frontend/.env.local
+frontend/tsconfig.tsbuildinfo
+backend/uploads/
