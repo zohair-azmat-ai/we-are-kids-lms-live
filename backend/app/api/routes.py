@@ -9,11 +9,13 @@ from livekit.api import AccessToken, VideoGrants
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.ai_service import answer_ai_chat, get_ai_insights
 from app.auth import authenticate_user, create_access_token, get_current_user, hash_password
 from app.config import (
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
     LIVEKIT_URL,
+    OPENAI_API_KEY,
     STRIPE_PRICE_PREMIUM,
     STRIPE_PRICE_STANDARD,
     STRIPE_PRICE_STARTER,
@@ -24,6 +26,9 @@ from app.config import (
 from app.db import SessionLocal
 from app.models import BillingAccount, Classroom, Enrollment, LiveSession, Recording, User
 from app.schemas import (
+    AIChatRequest,
+    AIChatResponse,
+    AIInsightsResponse,
     AuthLoginRequest,
     AuthLoginResponse,
     AuthRegisterRequest,
@@ -126,6 +131,19 @@ def require_stripe_config() -> None:
             status_code=503,
             detail="Billing is not configured yet. Please add Stripe environment variables.",
         )
+
+
+def require_ai_access(current_user: User) -> None:
+    if current_user.role not in {"admin", "teacher"}:
+        raise HTTPException(
+            status_code=403,
+            detail="AI assistant access is limited to admins and teachers.",
+        )
+
+
+def require_ai_config() -> None:
+    if not OPENAI_API_KEY:
+        return
 
 
 def serialize_auth_user(user: User) -> AuthUser:
@@ -744,6 +762,37 @@ async def handle_billing_webhook(request: Request) -> JSONResponse:
         handle_subscription_event(event_object)
 
     return JSONResponse({"received": True})
+
+
+@api_router.post("/ai/chat", response_model=AIChatResponse)
+def post_ai_chat(
+    payload: AIChatRequest,
+    current_user: User = Depends(get_current_user),
+) -> AIChatResponse:
+    require_ai_access(current_user)
+    require_ai_config()
+
+    cleaned_question = payload.question.strip()
+
+    if not cleaned_question:
+        raise HTTPException(status_code=400, detail="Please enter a question for the assistant.")
+
+    with SessionLocal() as db:
+        try:
+            return answer_ai_chat(db, current_user, cleaned_question)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@api_router.get("/ai/insights", response_model=AIInsightsResponse)
+def get_ai_insights_route(
+    current_user: User = Depends(get_current_user),
+) -> AIInsightsResponse:
+    require_ai_access(current_user)
+    require_ai_config()
+
+    with SessionLocal() as db:
+        return get_ai_insights(db, current_user)
 
 
 @api_router.post("/recordings/upload", response_model=RecordingItem)

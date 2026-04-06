@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
+import { AIInsightsPanel } from "@/components/ai-insights-panel";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { fetchRecordings, startLiveClass, type RecordingItem } from "@/lib/api";
 import { getRecordingStatus } from "@/lib/recordings";
@@ -107,6 +108,10 @@ export default function TeacherDashboardPage() {
             View Recordings
           </button>
         </section>
+      </div>
+
+      <div className="mt-8">
+        <AIInsightsPanel title="Teaching Insights" />
       </div>
 
       <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">

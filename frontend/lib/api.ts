@@ -210,6 +210,27 @@ export type BillingUsageSummary = {
   warnings: string[];
 };
 
+export type AIChatResponse = {
+  answer: string;
+  suggestions: string[];
+  source: "openai" | "fallback";
+};
+
+export type AIInsightItem = {
+  id: string;
+  title: string;
+  message: string;
+  severity: "info" | "warning" | "critical";
+  cta_label: string | null;
+  cta_href: string | null;
+};
+
+export type AIInsightsResponse = {
+  generated_at: string;
+  summary: string;
+  items: AIInsightItem[];
+};
+
 async function parseResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
   if (!response.ok) {
     if (response.status === 401) {
@@ -771,5 +792,27 @@ export async function fetchBillingUsage(
     `/api/v1/billing/usage?${query}`,
     { cache: "no-store" },
     "Billing usage request failed.",
+  );
+}
+
+export async function postAIChat(question: string): Promise<AIChatResponse> {
+  return requestJson<AIChatResponse>(
+    "/api/v1/ai/chat",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ question }),
+    },
+    "AI assistant request failed.",
+  );
+}
+
+export async function fetchAIInsights(): Promise<AIInsightsResponse> {
+  return requestJson<AIInsightsResponse>(
+    "/api/v1/ai/insights",
+    { cache: "no-store" },
+    "AI insights request failed.",
   );
 }

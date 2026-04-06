@@ -9,6 +9,7 @@ import { useAuth } from "@/components/auth-provider";
 import { type UserRole } from "@/lib/demo-auth";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { LoadingPanel } from "@/components/ui-state";
+import { AIAssistantChat } from "@/components/ai-assistant-chat";
 
 type DashboardShellProps = {
   allowedRole: UserRole;
@@ -215,6 +216,7 @@ export function DashboardShell({
 
         <div className="mt-8">{children}</div>
       </div>
+      {allowedRole !== "student" ? <AIAssistantChat /> : null}
     </main>
   );
 }

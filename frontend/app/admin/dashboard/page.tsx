@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { DashboardShell } from "@/components/dashboard-shell";
+import { AIInsightsPanel } from "@/components/ai-insights-panel";
 import {
   fetchAdminClasses,
   fetchAdminLiveSessions,
@@ -240,6 +241,10 @@ export default function AdminDashboardPage() {
           </div>
         </section>
       ) : null}
+
+      <div className="mt-8">
+        <AIInsightsPanel />
+      </div>
 
       <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
         <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">

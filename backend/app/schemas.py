@@ -246,6 +246,31 @@ class BillingUsageSummary(BaseModel):
     warnings: list[str]
 
 
+class AIChatRequest(BaseModel):
+    question: str
+
+
+class AIChatResponse(BaseModel):
+    answer: str
+    suggestions: list[str]
+    source: Literal["openai", "fallback"]
+
+
+class AIInsightItem(BaseModel):
+    id: str
+    title: str
+    message: str
+    severity: Literal["info", "warning", "critical"]
+    cta_label: str | None = None
+    cta_href: str | None = None
+
+
+class AIInsightsResponse(BaseModel):
+    generated_at: datetime
+    summary: str
+    items: list[AIInsightItem]
+
+
 class BillingCheckoutRequest(BaseModel):
     admin_email: str
     plan: BillingPlan
