@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
@@ -23,7 +23,7 @@ const planLabels: Record<BillingPlan, string> = {
   premium: "Premium",
 };
 
-export default function AdminBillingPage() {
+function AdminBillingPageContent() {
   const router = useRouter();
   const { user, isLoading: isAuthLoading } = useAuth();
   const searchParams = useSearchParams();
@@ -348,5 +348,26 @@ export default function AdminBillingPage() {
         </>
       )}
     </DashboardShell>
+  );
+}
+
+export default function AdminBillingPage() {
+  return (
+    <Suspense
+      fallback={
+        <DashboardShell
+          allowedRole="admin"
+          title="Admin Billing"
+          subtitle="Track your current plan, manage Stripe subscription details, and upgrade school capacity when your nursery grows."
+        >
+          <LoadingPanel
+            title="Loading billing"
+            message="Checking plan status, renewal timing, and usage limits."
+          />
+        </DashboardShell>
+      }
+    >
+      <AdminBillingPageContent />
+    </Suspense>
   );
 }

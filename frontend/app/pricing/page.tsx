@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
@@ -89,7 +89,7 @@ function formatLimit(value: number | null) {
   return value === null ? "Unlimited" : value.toString();
 }
 
-export default function PricingPage() {
+function PricingPageContent() {
   const router = useRouter();
   const { user } = useAuth();
   const searchParams = useSearchParams();
@@ -417,5 +417,27 @@ export default function PricingPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+export default function PricingPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen">
+          <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-10">
+            <SiteHeader showAnchorLinks={false} />
+            <div className="mt-6">
+              <LoadingPanel
+                title="Loading pricing"
+                message="Preparing subscription plans for your school."
+              />
+            </div>
+          </div>
+        </main>
+      }
+    >
+      <PricingPageContent />
+    </Suspense>
   );
 }
