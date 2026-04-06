@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 import {
   createAdminClass,
@@ -41,6 +42,8 @@ export function AdminClassesManagement() {
   const [editingId, setEditingId] = useState("");
   const [busyId, setBusyId] = useState("");
   const [formState, setFormState] = useState<ClassFormState>(defaultFormState);
+  const isLimitError =
+    error.includes("Upgrade your plan") || error.includes("plan allows up to");
 
   async function loadData() {
     try {
@@ -200,7 +203,23 @@ export function AdminClassesManagement() {
 
       {error ? (
         <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 px-4 py-4 text-sm text-red-600">
-          {error}
+          <p>{error}</p>
+          {isLimitError ? (
+            <div className="mt-3 flex flex-wrap gap-3">
+              <Link
+                href="/pricing"
+                className="inline-flex items-center justify-center rounded-full bg-red-500 px-4 py-2 text-xs font-semibold text-white"
+              >
+                View Plans
+              </Link>
+              <Link
+                href="/admin/billing"
+                className="inline-flex items-center justify-center rounded-full border border-red-200 bg-white px-4 py-2 text-xs font-semibold text-red-700"
+              >
+                Upgrade Plan
+              </Link>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

@@ -142,9 +142,11 @@ export type SuccessResponse = {
 export type BillingPlan = "starter" | "standard" | "premium";
 
 export type BillingPlanFeatures = {
-  teachers_limit: number;
-  students_limit: number;
-  classes_limit: number;
+  teachers_limit: number | null;
+  students_limit: number | null;
+  classes_limit: number | null;
+  recordings_access: "basic" | "full";
+  priority_features: boolean;
   monthly_label: string;
   audience: string;
   highlights: string[];
@@ -178,6 +180,34 @@ export type BillingCheckoutResponse = {
 
 export type BillingCustomerPortalResponse = {
   portal_url: string;
+};
+
+export type BillingUsageMetric = {
+  current: number;
+  limit: number | null;
+  remaining: number | null;
+  is_unlimited: boolean;
+  percent_used: number;
+  is_near_limit: boolean;
+  is_at_limit: boolean;
+  upgrade_message: string | null;
+};
+
+export type BillingUsageSummary = {
+  plan: BillingPlan;
+  subscription_status: string;
+  teacher_count: number;
+  teacher_limit: number | null;
+  student_count: number;
+  student_limit: number | null;
+  class_count: number;
+  class_limit: number | null;
+  teachers: BillingUsageMetric;
+  students: BillingUsageMetric;
+  classes: BillingUsageMetric;
+  recordings_access: "basic" | "full";
+  priority_features: boolean;
+  warnings: string[];
 };
 
 async function parseResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
@@ -730,5 +760,16 @@ export async function createBillingCustomerPortal(params: {
       }),
     },
     "Unable to open Stripe customer portal.",
+  );
+}
+
+export async function fetchBillingUsage(
+  adminEmail: string,
+): Promise<BillingUsageSummary> {
+  const query = new URLSearchParams({ admin_email: adminEmail }).toString();
+  return requestJson<BillingUsageSummary>(
+    `/api/v1/billing/usage?${query}`,
+    { cache: "no-store" },
+    "Billing usage request failed.",
   );
 }

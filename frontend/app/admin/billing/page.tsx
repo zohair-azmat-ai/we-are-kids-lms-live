@@ -10,8 +10,11 @@ import {
   createBillingCheckoutSession,
   createBillingCustomerPortal,
   fetchBillingSubscription,
+  fetchBillingUsage,
   type BillingPlan,
   type BillingSubscription,
+  type BillingUsageMetric,
+  type BillingUsageSummary,
 } from "@/lib/api";
 
 const planLabels: Record<BillingPlan, string> = {
@@ -25,6 +28,7 @@ export default function AdminBillingPage() {
   const { user, isLoading: isAuthLoading } = useAuth();
   const searchParams = useSearchParams();
   const [subscription, setSubscription] = useState<BillingSubscription | null>(null);
+  const [usage, setUsage] = useState<BillingUsageSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -52,8 +56,12 @@ export default function AdminBillingPage() {
       try {
         setIsLoading(true);
         setError("");
-        const nextSubscription = await fetchBillingSubscription(user.email);
+        const [nextSubscription, nextUsage] = await Promise.all([
+          fetchBillingSubscription(user.email),
+          fetchBillingUsage(user.email),
+        ]);
         setSubscription(nextSubscription);
+        setUsage(nextUsage);
       } catch (requestError) {
         setError(
           requestError instanceof Error
@@ -71,6 +79,45 @@ export default function AdminBillingPage() {
   const currentPlan = useMemo(() => {
     return subscription?.plans.find((plan) => plan.code === subscription.plan) ?? null;
   }, [subscription]);
+
+  function formatLimit(value: number | null) {
+    return value === null ? "Unlimited" : value.toString();
+  }
+
+  function renderUsageCard(label: string, metric: BillingUsageMetric) {
+    return (
+      <div
+        key={label}
+        className="rounded-[1.75rem] border border-slate-100 bg-slate-50 p-4"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm font-semibold text-slate-800">{label}</p>
+          <p className="text-sm text-slate-600">
+            {metric.current} / {formatLimit(metric.limit)}
+          </p>
+        </div>
+        <div className="mt-3 h-3 overflow-hidden rounded-full bg-white">
+          <div
+            className={`h-full rounded-full ${
+              metric.is_at_limit
+                ? "bg-red-500"
+                : metric.is_near_limit
+                  ? "bg-amber-500"
+                  : "bg-blue-600"
+            }`}
+            style={{ width: `${metric.is_unlimited ? 24 : metric.percent_used}%` }}
+          />
+        </div>
+        {metric.upgrade_message ? (
+          <p className="mt-3 text-xs text-slate-500">{metric.upgrade_message}</p>
+        ) : (
+          <p className="mt-3 text-xs text-slate-500">
+            {metric.is_unlimited ? "Unlimited capacity on this plan." : "Capacity is healthy."}
+          </p>
+        )}
+      </div>
+    );
+  }
 
   async function handlePlanChange(plan: BillingPlan) {
     if (!user || user.role !== "admin") {
@@ -134,7 +181,7 @@ export default function AdminBillingPage() {
         <section className="rounded-[2rem] border border-red-100 bg-white p-6 shadow-soft">
           <p className="text-red-600">{error}</p>
         </section>
-      ) : !subscription || !currentPlan ? (
+      ) : !subscription || !currentPlan || !usage ? (
         <section className="rounded-[2rem] border border-red-100 bg-white p-6 shadow-soft">
           <p className="text-red-600">Billing information is not available right now.</p>
         </section>
@@ -186,6 +233,12 @@ export default function AdminBillingPage() {
                 <div className="rounded-2xl border border-slate-100 bg-white px-4 py-4 text-sm text-slate-700">
                   School: {subscription.school_name}
                 </div>
+                <div className="rounded-2xl border border-slate-100 bg-white px-4 py-4 text-sm text-slate-700">
+                  Recordings access: {usage.recordings_access === "full" ? "Full" : "Basic"}
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-white px-4 py-4 text-sm text-slate-700">
+                  Premium features: {usage.priority_features ? "Enabled" : "Not included"}
+                </div>
               </div>
 
               <div className="mt-6 flex flex-col gap-3 sm:flex-row">
@@ -212,46 +265,23 @@ export default function AdminBillingPage() {
                 Plan Usage
               </p>
               <div className="mt-5 grid gap-4">
-                {[
-                  {
-                    label: "Teachers",
-                    current: subscription.teachers_count,
-                    limit: currentPlan.features.teachers_limit,
-                  },
-                  {
-                    label: "Students",
-                    current: subscription.students_count,
-                    limit: currentPlan.features.students_limit,
-                  },
-                  {
-                    label: "Classes",
-                    current: subscription.classes_count,
-                    limit: currentPlan.features.classes_limit,
-                  },
-                ].map((item) => {
-                  const percent = Math.min(100, Math.round((item.current / item.limit) * 100));
-
-                  return (
-                    <div
-                      key={item.label}
-                      className="rounded-[1.75rem] border border-slate-100 bg-slate-50 p-4"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold text-slate-800">{item.label}</p>
-                        <p className="text-sm text-slate-600">
-                          {item.current} / {item.limit}
-                        </p>
-                      </div>
-                      <div className="mt-3 h-3 overflow-hidden rounded-full bg-white">
-                        <div
-                          className="h-full rounded-full bg-blue-600"
-                          style={{ width: `${percent}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
+                {renderUsageCard("Teachers", usage.teachers)}
+                {renderUsageCard("Students", usage.students)}
+                {renderUsageCard("Classes", usage.classes)}
               </div>
+
+              {usage.warnings.length ? (
+                <div className="mt-5 rounded-[1.75rem] border border-amber-100 bg-amber-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-700">
+                    Capacity Alerts
+                  </p>
+                  <div className="mt-3 space-y-2 text-sm text-amber-900">
+                    {usage.warnings.map((warning) => (
+                      <p key={warning}>{warning}</p>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </article>
           </section>
 
@@ -285,9 +315,15 @@ export default function AdminBillingPage() {
                   </p>
                   <p className="mt-3 text-sm leading-7 text-slate-600">{plan.description}</p>
                   <div className="mt-4 space-y-2 text-sm text-slate-700">
-                    <p>Teachers: {plan.features.teachers_limit}</p>
-                    <p>Students: {plan.features.students_limit}</p>
-                    <p>Classes: {plan.features.classes_limit}</p>
+                    <p>Teachers: {formatLimit(plan.features.teachers_limit)}</p>
+                    <p>Students: {formatLimit(plan.features.students_limit)}</p>
+                    <p>Classes: {formatLimit(plan.features.classes_limit)}</p>
+                    <p>
+                      Recordings: {plan.features.recordings_access === "full" ? "Full" : "Basic"}
+                    </p>
+                    <p>
+                      Premium features: {plan.features.priority_features ? "Enabled" : "No"}
+                    </p>
                   </div>
                   <button
                     type="button"

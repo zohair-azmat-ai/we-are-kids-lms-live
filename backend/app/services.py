@@ -14,6 +14,8 @@ from app.schemas import (
     BillingPlanFeatures,
     BillingPlanInfo,
     BillingSubscription,
+    BillingUsageMetric,
+    BillingUsageSummary,
     ClassSummary,
     LiveClass,
     LiveSessionSummary,
@@ -27,42 +29,48 @@ PLAN_FEATURES: dict[BillingPlan, dict[str, object]] = {
     "starter": {
         "name": "Starter",
         "description": "For a small school getting its digital classrooms online.",
-        "teachers_limit": 3,
-        "students_limit": 30,
-        "classes_limit": 6,
+        "teachers_limit": 2,
+        "students_limit": 10,
+        "classes_limit": 3,
+        "recordings_access": "basic",
+        "priority_features": False,
         "monthly_label": "Entry plan",
         "audience": "Small school",
         "highlights": [
             "Core nursery LMS dashboard",
             "LiveKit classroom sessions",
-            "Basic recordings and admin access",
+            "Basic recordings access",
         ],
     },
     "standard": {
         "name": "Standard",
         "description": "For growing schools that need more teachers, classes, and students.",
-        "teachers_limit": 12,
-        "students_limit": 180,
-        "classes_limit": 24,
+        "teachers_limit": 10,
+        "students_limit": 100,
+        "classes_limit": 20,
+        "recordings_access": "full",
+        "priority_features": False,
         "monthly_label": "Growth plan",
         "audience": "Growing school",
         "highlights": [
             "Higher classroom and enrollment capacity",
-            "Subscription billing with portal access",
+            "Full recordings access",
             "Better room for expanding teams",
         ],
     },
     "premium": {
         "name": "Premium",
         "description": "For advanced usage across larger school operations.",
-        "teachers_limit": 50,
-        "students_limit": 1000,
-        "classes_limit": 120,
+        "teachers_limit": None,
+        "students_limit": None,
+        "classes_limit": None,
+        "recordings_access": "full",
+        "priority_features": True,
         "monthly_label": "Advanced plan",
         "audience": "Advanced usage",
         "highlights": [
-            "Highest LMS capacity limits",
-            "Priority-ready structure for expansion",
+            "Unlimited core capacity",
+            "Priority-ready features enabled",
             "Best fit for multi-team operations",
         ],
     },
@@ -468,9 +476,11 @@ def get_billing_account_by_subscription_id(
 def get_plan_features(plan: BillingPlan) -> BillingPlanFeatures:
     plan_config = PLAN_FEATURES[plan]
     return BillingPlanFeatures(
-        teachers_limit=int(plan_config["teachers_limit"]),
-        students_limit=int(plan_config["students_limit"]),
-        classes_limit=int(plan_config["classes_limit"]),
+        teachers_limit=cast(int | None, plan_config["teachers_limit"]),
+        students_limit=cast(int | None, plan_config["students_limit"]),
+        classes_limit=cast(int | None, plan_config["classes_limit"]),
+        recordings_access=cast(str, plan_config["recordings_access"]),
+        priority_features=bool(plan_config["priority_features"]),
         monthly_label=str(plan_config["monthly_label"]),
         audience=str(plan_config["audience"]),
         highlights=[str(item) for item in plan_config["highlights"]],
@@ -507,6 +517,90 @@ def get_current_usage(db: Session) -> dict[str, int]:
     }
 
 
+def build_usage_metric(current: int, limit: int | None, label: str) -> BillingUsageMetric:
+    is_unlimited = limit is None
+    remaining = None if is_unlimited else max(0, limit - current)
+    percent_used = 0 if is_unlimited or limit == 0 else min(100, round((current / limit) * 100))
+    is_at_limit = False if is_unlimited else current >= limit
+    is_near_limit = False if is_unlimited else current >= max(1, int(limit * 0.8))
+    upgrade_message = None
+
+    if is_at_limit:
+        upgrade_message = f"Upgrade your plan to add more {label.lower()}."
+    elif is_near_limit:
+        upgrade_message = f"You are close to your {label.lower()} limit."
+
+    return BillingUsageMetric(
+        current=current,
+        limit=limit,
+        remaining=remaining,
+        is_unlimited=is_unlimited,
+        percent_used=percent_used,
+        is_near_limit=is_near_limit,
+        is_at_limit=is_at_limit,
+        upgrade_message=upgrade_message,
+    )
+
+
+def build_billing_usage_summary(db: Session, account: BillingAccount) -> BillingUsageSummary:
+    usage = get_current_usage(db)
+    current_plan = cast(BillingPlan, account.plan if account.plan in PLAN_FEATURES else "starter")
+    features = get_plan_features(current_plan)
+
+    teachers_metric = build_usage_metric(
+        usage["teachers_count"], features.teachers_limit, "Teachers"
+    )
+    students_metric = build_usage_metric(
+        usage["students_count"], features.students_limit, "Students"
+    )
+    classes_metric = build_usage_metric(
+        usage["classes_count"], features.classes_limit, "Classes"
+    )
+
+    warnings: list[str] = []
+
+    if teachers_metric.is_at_limit:
+        warnings.append(
+            f"{PLAN_FEATURES[current_plan]['name']} plan allows up to {features.teachers_limit} teachers."
+        )
+    elif teachers_metric.is_near_limit and not teachers_metric.is_unlimited:
+        warnings.append("You are close to your teacher limit.")
+
+    if students_metric.is_at_limit:
+        warnings.append(
+            f"{PLAN_FEATURES[current_plan]['name']} plan allows up to {features.students_limit} students."
+        )
+    elif students_metric.is_near_limit and not students_metric.is_unlimited:
+        warnings.append("You are close to your student limit.")
+
+    if classes_metric.is_at_limit:
+        warnings.append(
+            f"{PLAN_FEATURES[current_plan]['name']} plan allows up to {features.classes_limit} classes."
+        )
+    elif classes_metric.is_near_limit and not classes_metric.is_unlimited:
+        warnings.append("You are close to your class limit.")
+
+    if current_plan != "premium":
+        warnings.append("Upgrade to Premium for unlimited core capacity and priority-ready features.")
+
+    return BillingUsageSummary(
+        plan=current_plan,
+        subscription_status=account.subscription_status,
+        teacher_count=usage["teachers_count"],
+        teacher_limit=features.teachers_limit,
+        student_count=usage["students_count"],
+        student_limit=features.students_limit,
+        class_count=usage["classes_count"],
+        class_limit=features.classes_limit,
+        teachers=teachers_metric,
+        students=students_metric,
+        classes=classes_metric,
+        recordings_access=features.recordings_access,
+        priority_features=features.priority_features,
+        warnings=warnings,
+    )
+
+
 def build_billing_subscription(db: Session, account: BillingAccount) -> BillingSubscription:
     usage = get_current_usage(db)
     current_plan = account.plan if account.plan in PLAN_FEATURES else "starter"
@@ -536,7 +630,7 @@ def require_admin_user(db: Session, admin_email: str) -> User:
 
 def require_plan_capacity(db: Session, resource_type: str) -> None:
     account = get_or_create_billing_account(db)
-    current_plan = account.plan if account.plan in PLAN_FEATURES else "starter"
+    current_plan = cast(BillingPlan, account.plan if account.plan in PLAN_FEATURES else "starter")
     features = get_plan_features(current_plan)
     usage = get_current_usage(db)
 
@@ -545,11 +639,18 @@ def require_plan_capacity(db: Session, resource_type: str) -> None:
     limit_value = getattr(features, limit_key)
     current_value = usage[count_key]
 
+    if limit_value is None:
+        return
+
     if current_value >= limit_value:
         plan_name = PLAN_FEATURES[current_plan]["name"]
+        singular_resource = resource_type[:-1]
         raise HTTPException(
             status_code=403,
-            detail=f"{plan_name} plan limit reached for {resource_type}. Upgrade your subscription to continue.",
+            detail=(
+                f"{plan_name} plan allows up to {limit_value} {resource_type}. "
+                f"Upgrade your plan to add more {singular_resource}s."
+            ),
         )
 
 

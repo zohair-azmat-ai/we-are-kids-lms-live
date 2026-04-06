@@ -9,14 +9,18 @@ import {
   fetchAdminLiveSessions,
   fetchAdminStudents,
   fetchAdminTeachers,
+  fetchBillingUsage,
   fetchRecordings,
   type AdminLiveSession,
+  type BillingUsageSummary,
   type RecordingItem,
 } from "@/lib/api";
+import { useAuth } from "@/components/auth-provider";
 import { getRecordingStatus } from "@/lib/recordings";
 
 export default function AdminDashboardPage() {
   const router = useRouter();
+  const { user } = useAuth();
   const [teacherCount, setTeacherCount] = useState(0);
   const [studentCount, setStudentCount] = useState(0);
   const [classCount, setClassCount] = useState(0);
@@ -24,6 +28,7 @@ export default function AdminDashboardPage() {
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
   const [recordingsError, setRecordingsError] = useState("");
   const [overviewError, setOverviewError] = useState("");
+  const [usage, setUsage] = useState<BillingUsageSummary | null>(null);
   const [isLoadingOverview, setIsLoadingOverview] = useState(true);
   const [isLoadingRecordings, setIsLoadingRecordings] = useState(true);
 
@@ -31,16 +36,18 @@ export default function AdminDashboardPage() {
     async function loadOverview() {
       try {
         setIsLoadingOverview(true);
-        const [teachers, students, classes, liveSessionsResponse] = await Promise.all([
+        const [teachers, students, classes, liveSessionsResponse, usageResponse] = await Promise.all([
           fetchAdminTeachers(),
           fetchAdminStudents(),
           fetchAdminClasses(),
           fetchAdminLiveSessions(),
+          user ? fetchBillingUsage(user.email) : Promise.resolve(null),
         ]);
         setTeacherCount(teachers.length);
         setStudentCount(students.length);
         setClassCount(classes.length);
         setLiveSessions(liveSessionsResponse);
+        setUsage(usageResponse);
       } catch (requestError) {
         setOverviewError(
           requestError instanceof Error
@@ -70,7 +77,7 @@ export default function AdminDashboardPage() {
 
     void loadOverview();
     void loadRecordings();
-  }, []);
+  }, [user]);
 
   const quickLinks = [
     {
@@ -157,6 +164,82 @@ export default function AdminDashboardPage() {
           </p>
         </article>
       </div>
+
+      {usage ? (
+        <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-violet-600">
+                SaaS Usage
+              </p>
+              <h2 className="mt-2 text-2xl font-semibold text-slate-800">
+                {usage.plan.charAt(0).toUpperCase() + usage.plan.slice(1)} plan overview
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => router.push("/admin/billing")}
+              className="inline-flex items-center justify-center rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white"
+            >
+              Manage Billing
+            </button>
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-3">
+            {[
+              { label: "Teachers", metric: usage.teachers },
+              { label: "Students", metric: usage.students },
+              { label: "Classes", metric: usage.classes },
+            ].map(({ label, metric }) => (
+              <article
+                key={label}
+                className="rounded-[1.75rem] border border-slate-100 bg-slate-50 p-4"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-slate-800">{label}</p>
+                  <p className="text-sm text-slate-600">
+                    {metric.current} / {metric.limit === null ? "Unlimited" : metric.limit}
+                  </p>
+                </div>
+                <div className="mt-3 h-3 overflow-hidden rounded-full bg-white">
+                  <div
+                    className={`h-full rounded-full ${
+                      metric.is_at_limit
+                        ? "bg-red-500"
+                        : metric.is_near_limit
+                          ? "bg-amber-500"
+                          : "bg-blue-600"
+                    }`}
+                    style={{ width: `${metric.is_unlimited ? 24 : metric.percent_used}%` }}
+                  />
+                </div>
+                <p className="mt-3 text-xs text-slate-500">
+                  {metric.upgrade_message ?? "Capacity is healthy."}
+                </p>
+              </article>
+            ))}
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_auto]">
+            <div className="rounded-[1.75rem] border border-slate-100 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-700">
+                Plan Signals
+              </p>
+              <div className="mt-3 space-y-2 text-sm text-slate-700">
+                {usage.warnings.map((warning) => (
+                  <p key={warning}>{warning}</p>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-[1.75rem] border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700">
+              <p>Recordings: {usage.recordings_access === "full" ? "Full access" : "Basic access"}</p>
+              <p className="mt-2">
+                Premium features: {usage.priority_features ? "Enabled" : "Upgrade for priority-ready tools"}
+              </p>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
         <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">

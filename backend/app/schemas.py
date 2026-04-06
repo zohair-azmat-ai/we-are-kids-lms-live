@@ -186,9 +186,11 @@ class AuthLoginResponse(BaseModel):
 
 
 class BillingPlanFeatures(BaseModel):
-    teachers_limit: int
-    students_limit: int
-    classes_limit: int
+    teachers_limit: int | None
+    students_limit: int | None
+    classes_limit: int | None
+    recordings_access: Literal["basic", "full"]
+    priority_features: bool
     monthly_label: str
     audience: str
     highlights: list[str]
@@ -214,6 +216,34 @@ class BillingSubscription(BaseModel):
     teachers_count: int
     students_count: int
     classes_count: int
+
+
+class BillingUsageMetric(BaseModel):
+    current: int
+    limit: int | None
+    remaining: int | None
+    is_unlimited: bool
+    percent_used: int
+    is_near_limit: bool
+    is_at_limit: bool
+    upgrade_message: str | None = None
+
+
+class BillingUsageSummary(BaseModel):
+    plan: BillingPlan
+    subscription_status: str
+    teacher_count: int
+    teacher_limit: int | None
+    student_count: int
+    student_limit: int | None
+    class_count: int
+    class_limit: int | None
+    teachers: BillingUsageMetric
+    students: BillingUsageMetric
+    classes: BillingUsageMetric
+    recordings_access: Literal["basic", "full"]
+    priority_features: bool
+    warnings: list[str]
 
 
 class BillingCheckoutRequest(BaseModel):

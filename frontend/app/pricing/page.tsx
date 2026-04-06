@@ -29,15 +29,17 @@ const publicPlans: BillingPlanInfo[] = [
     description: "For a small school getting its digital classrooms online.",
     is_current: false,
     features: {
-      teachers_limit: 3,
-      students_limit: 30,
-      classes_limit: 6,
+      teachers_limit: 2,
+      students_limit: 10,
+      classes_limit: 3,
+      recordings_access: "basic",
+      priority_features: false,
       monthly_label: "Entry plan",
       audience: "Small school",
       highlights: [
         "Core nursery LMS dashboard",
         "LiveKit classroom sessions",
-        "Basic recordings and admin access",
+        "Basic recordings access",
       ],
     },
   },
@@ -47,14 +49,16 @@ const publicPlans: BillingPlanInfo[] = [
     description: "For growing schools that need more teachers, classes, and students.",
     is_current: false,
     features: {
-      teachers_limit: 12,
-      students_limit: 180,
-      classes_limit: 24,
+      teachers_limit: 10,
+      students_limit: 100,
+      classes_limit: 20,
+      recordings_access: "full",
+      priority_features: false,
       monthly_label: "Growth plan",
       audience: "Growing school",
       highlights: [
         "Higher classroom and enrollment capacity",
-        "Subscription billing with portal access",
+        "Full recordings access",
         "Better room for expanding teams",
       ],
     },
@@ -65,19 +69,25 @@ const publicPlans: BillingPlanInfo[] = [
     description: "For advanced usage across larger school operations.",
     is_current: false,
     features: {
-      teachers_limit: 50,
-      students_limit: 1000,
-      classes_limit: 120,
+      teachers_limit: null,
+      students_limit: null,
+      classes_limit: null,
+      recordings_access: "full",
+      priority_features: true,
       monthly_label: "Advanced plan",
       audience: "Advanced usage",
       highlights: [
-        "Highest LMS capacity limits",
-        "Priority-ready structure for expansion",
+        "Unlimited core capacity",
+        "Priority-ready features enabled",
         "Best fit for multi-team operations",
       ],
     },
   },
 ];
+
+function formatLimit(value: number | null) {
+  return value === null ? "Unlimited" : value.toString();
+}
 
 export default function PricingPage() {
   const router = useRouter();
@@ -209,9 +219,9 @@ export default function PricingPage() {
                 Why schools upgrade
               </p>
               <div className="mt-5 grid gap-3">
-                {[
+                {[ 
                   "More teachers and student accounts without admin bottlenecks.",
-                  "A clear Stripe checkout flow with subscription management.",
+                  "Clear plan limits that match real nursery growth stages.",
                   "A premium-feeling plan structure that fits real school growth.",
                 ].map((item) => (
                   <div
@@ -282,15 +292,27 @@ export default function PricingPage() {
                 <div className="mt-6 grid gap-3 rounded-[1.75rem] border border-slate-100 bg-white p-4">
                   <div className="flex items-center justify-between text-sm text-slate-700">
                     <span>Teachers</span>
-                    <span className="font-semibold">{plan.features.teachers_limit}</span>
+                    <span className="font-semibold">{formatLimit(plan.features.teachers_limit)}</span>
                   </div>
                   <div className="flex items-center justify-between text-sm text-slate-700">
                     <span>Students</span>
-                    <span className="font-semibold">{plan.features.students_limit}</span>
+                    <span className="font-semibold">{formatLimit(plan.features.students_limit)}</span>
                   </div>
                   <div className="flex items-center justify-between text-sm text-slate-700">
                     <span>Classes</span>
-                    <span className="font-semibold">{plan.features.classes_limit}</span>
+                    <span className="font-semibold">{formatLimit(plan.features.classes_limit)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm text-slate-700">
+                    <span>Recordings</span>
+                    <span className="font-semibold">
+                      {plan.features.recordings_access === "full" ? "Full" : "Basic"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm text-slate-700">
+                    <span>Priority features</span>
+                    <span className="font-semibold">
+                      {plan.features.priority_features ? "Included" : "Not included"}
+                    </span>
                   </div>
                 </div>
 
@@ -358,11 +380,37 @@ export default function PricingPage() {
                         key={`${plan.code}-${row.key}`}
                         className="border-b border-slate-100 px-4 py-4 text-sm text-slate-600"
                       >
-                        {plan.features[row.key]}
+                        {formatLimit(plan.features[row.key])}
                       </td>
                     ))}
                   </tr>
                 ))}
+                <tr>
+                  <td className="border-b border-slate-100 px-4 py-4 text-sm font-medium text-slate-700">
+                    Recordings access
+                  </td>
+                  {orderedPlans.map((plan) => (
+                    <td
+                      key={`${plan.code}-recordings`}
+                      className="border-b border-slate-100 px-4 py-4 text-sm text-slate-600"
+                    >
+                      {plan.features.recordings_access === "full" ? "Full" : "Basic"}
+                    </td>
+                  ))}
+                </tr>
+                <tr>
+                  <td className="px-4 py-4 text-sm font-medium text-slate-700">
+                    Premium features
+                  </td>
+                  {orderedPlans.map((plan) => (
+                    <td
+                      key={`${plan.code}-priority`}
+                      className="px-4 py-4 text-sm text-slate-600"
+                    >
+                      {plan.features.priority_features ? "Included" : "No"}
+                    </td>
+                  ))}
+                </tr>
               </tbody>
             </table>
           </div>

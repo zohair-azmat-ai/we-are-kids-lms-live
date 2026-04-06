@@ -34,6 +34,7 @@ from app.schemas import (
     BillingCustomerPortalResponse,
     BillingSubscription,
     BillingSubscriptionRequest,
+    BillingUsageSummary,
     ClassCreateRequest,
     ClassSummary,
     ClassroomPresenceRequest,
@@ -58,6 +59,7 @@ from app.schemas import (
 )
 from app.services import (
     build_billing_subscription,
+    build_billing_usage_summary,
     build_class_summary,
     build_live_class_response,
     build_live_session_summary,
@@ -654,6 +656,24 @@ def get_billing_subscription(
 
         account = get_or_create_billing_account(db)
         return build_billing_subscription(db, account)
+
+
+@api_router.get("/billing/usage", response_model=BillingUsageSummary)
+def get_billing_usage(
+    admin_email: str,
+    current_user: User = Depends(get_current_user),
+) -> BillingUsageSummary:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required for billing.")
+
+    with SessionLocal() as db:
+        admin_user = require_admin_user(db, admin_email)
+
+        if admin_user.email != current_user.email:
+            raise HTTPException(status_code=403, detail="Admin access is required for billing.")
+
+        account = get_or_create_billing_account(db)
+        return build_billing_usage_summary(db, account)
 
 
 @api_router.post("/billing/customer-portal", response_model=BillingCustomerPortalResponse)
