@@ -4,9 +4,9 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
+import { useAuth } from "@/components/auth-provider";
 import { LoadingPanel } from "@/components/ui-state";
 import { SiteHeader } from "@/components/site-header";
-import { getSession } from "@/lib/demo-auth";
 import {
   createBillingCheckoutSession,
   fetchBillingSubscription,
@@ -22,8 +22,66 @@ const comparisonRows = [
   { label: "Classes", key: "classes_limit" },
 ] as const;
 
+const publicPlans: BillingPlanInfo[] = [
+  {
+    code: "starter",
+    name: "Starter",
+    description: "For a small school getting its digital classrooms online.",
+    is_current: false,
+    features: {
+      teachers_limit: 3,
+      students_limit: 30,
+      classes_limit: 6,
+      monthly_label: "Entry plan",
+      audience: "Small school",
+      highlights: [
+        "Core nursery LMS dashboard",
+        "LiveKit classroom sessions",
+        "Basic recordings and admin access",
+      ],
+    },
+  },
+  {
+    code: "standard",
+    name: "Standard",
+    description: "For growing schools that need more teachers, classes, and students.",
+    is_current: false,
+    features: {
+      teachers_limit: 12,
+      students_limit: 180,
+      classes_limit: 24,
+      monthly_label: "Growth plan",
+      audience: "Growing school",
+      highlights: [
+        "Higher classroom and enrollment capacity",
+        "Subscription billing with portal access",
+        "Better room for expanding teams",
+      ],
+    },
+  },
+  {
+    code: "premium",
+    name: "Premium",
+    description: "For advanced usage across larger school operations.",
+    is_current: false,
+    features: {
+      teachers_limit: 50,
+      students_limit: 1000,
+      classes_limit: 120,
+      monthly_label: "Advanced plan",
+      audience: "Advanced usage",
+      highlights: [
+        "Highest LMS capacity limits",
+        "Priority-ready structure for expansion",
+        "Best fit for multi-team operations",
+      ],
+    },
+  },
+];
+
 export default function PricingPage() {
   const router = useRouter();
+  const { user } = useAuth();
   const searchParams = useSearchParams();
   const [plans, setPlans] = useState<BillingPlanInfo[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -41,18 +99,15 @@ export default function PricingPage() {
 
   useEffect(() => {
     async function loadPlans() {
-      const session = getSession();
-
       try {
         setIsLoading(true);
         setError("");
 
-        if (session?.role === "admin") {
-          const subscription = await fetchBillingSubscription(session.email);
+        if (user?.role === "admin") {
+          const subscription = await fetchBillingSubscription(user.email);
           setPlans(subscription.plans);
         } else {
-          const fallback = await fetchBillingSubscription("admin@wearekids.com");
-          setPlans(fallback.plans);
+          setPlans(publicPlans);
         }
       } catch (requestError) {
         setError(
@@ -64,7 +119,7 @@ export default function PricingPage() {
     }
 
     void loadPlans();
-  }, []);
+  }, [user]);
 
   const orderedPlans = useMemo(() => {
     return [...plans].sort(
@@ -73,9 +128,7 @@ export default function PricingPage() {
   }, [plans]);
 
   async function handleSubscribe(plan: BillingPlan) {
-    const session = getSession();
-
-    if (!session || session.role !== "admin") {
+    if (!user || user.role !== "admin") {
       router.push("/login");
       return;
     }
@@ -84,7 +137,7 @@ export default function PricingPage() {
       setBusyPlan(plan);
       setError("");
       const response = await createBillingCheckoutSession({
-        adminEmail: session.email,
+        adminEmail: user.email,
         plan,
       });
       window.location.href = response.checkout_url;

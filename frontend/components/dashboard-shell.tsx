@@ -5,12 +5,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import {
-  clearSession,
-  getSession,
-  type SessionUser,
-  type UserRole,
-} from "@/lib/demo-auth";
+import { useAuth } from "@/components/auth-provider";
+import { type UserRole } from "@/lib/demo-auth";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { LoadingPanel } from "@/components/ui-state";
 
@@ -29,23 +25,25 @@ export function DashboardShell({
 }: DashboardShellProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const [session, setSession] = useState<SessionUser | null>(null);
-  const [checking, setChecking] = useState(true);
+  const { user, isLoading, logout } = useAuth();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   usePageTitle(title);
 
   useEffect(() => {
-    const storedSession = getSession();
+    if (isLoading) {
+      return;
+    }
 
-    if (!storedSession || storedSession.role !== allowedRole) {
+    if (!user) {
       router.replace("/login");
       return;
     }
 
-    setSession(storedSession);
-    setChecking(false);
-  }, [allowedRole, router]);
+    if (user.role !== allowedRole) {
+      router.replace(`/${user.role}/dashboard`);
+    }
+  }, [allowedRole, isLoading, router, user]);
 
   const dashboardLinksByRole: Record<UserRole, Array<{ href: string; label: string }>> = {
     admin: [
@@ -70,11 +68,11 @@ export function DashboardShell({
   const dashboardLinks = dashboardLinksByRole[allowedRole];
 
   function handleLogout() {
-    clearSession();
+    logout();
     router.replace("/login");
   }
 
-  if (checking || !session) {
+  if (isLoading || !user || user.role !== allowedRole) {
     return (
       <main className="min-h-screen">
         <div className="mx-auto max-w-7xl px-6 py-10 sm:px-8 lg:px-10">
@@ -205,13 +203,13 @@ export function DashboardShell({
             Welcome Back
           </p>
           <h1 className="mt-4 text-3xl font-semibold text-slate-800 sm:text-5xl">
-            {session.name}
+            {user.name}
           </h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600 sm:text-lg sm:leading-8">
             {subtitle}
           </p>
           <div className="mt-6 inline-flex max-w-full rounded-full bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700">
-            Signed in as {session.email}
+            Signed in as {user.email}
           </div>
         </section>
 

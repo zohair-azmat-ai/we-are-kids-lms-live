@@ -1,3 +1,5 @@
+import { clearSession, getAccessToken, type UserRole } from "@/lib/demo-auth";
+
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "")
   .trim()
   .replace(/\/$/, "");
@@ -14,6 +16,21 @@ export type HealthResponse = {
   status: string;
   service: string;
   version: string;
+};
+
+export type AuthUser = {
+  user_id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  status: "active" | "inactive";
+};
+
+export type AuthLoginResponse = {
+  access_token: string;
+  token_type: string;
+  expires_at: string;
+  user: AuthUser;
 };
 
 export type LiveClassSession = {
@@ -165,6 +182,10 @@ export type BillingCustomerPortalResponse = {
 
 async function parseResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
   if (!response.ok) {
+    if (response.status === 401) {
+      clearSession();
+    }
+
     const errorPayload = (await response.json().catch(() => null)) as
       | { detail?: string }
       | null;
@@ -186,7 +207,17 @@ async function requestJson<T>(
   }
 
   try {
-    const response = await fetch(`${API_BASE_URL}${path}`, init);
+    const headers = new Headers(init.headers ?? {});
+    const accessToken = getAccessToken();
+
+    if (accessToken && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${accessToken}`);
+    }
+
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers,
+    });
     return await parseResponse<T>(response, fallbackMessage);
   } catch (error) {
     if (error instanceof Error && error.message !== "Failed to fetch") {
@@ -235,6 +266,36 @@ export async function fetchHealth(): Promise<HealthResponse> {
     "/health",
     { cache: "no-store" },
     "Health check failed.",
+  );
+}
+
+export async function loginWithPassword(params: {
+  email: string;
+  password: string;
+  role: UserRole;
+}): Promise<AuthLoginResponse> {
+  return requestJson<AuthLoginResponse>(
+    "/api/v1/auth/login",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email: params.email,
+        password: params.password,
+        role: params.role,
+      }),
+    },
+    "Login failed.",
+  );
+}
+
+export async function fetchCurrentUser(): Promise<AuthUser> {
+  return requestJson<AuthUser>(
+    "/api/v1/auth/me",
+    { cache: "no-store" },
+    "Unable to load your account session.",
   );
 }
 

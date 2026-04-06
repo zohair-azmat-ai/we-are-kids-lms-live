@@ -4,10 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConnectionState, Participant, Room, RoomEvent, Track } from "livekit-client";
 
+import { useAuth } from "@/components/auth-provider";
 import { LoadingPanel, Spinner } from "@/components/ui-state";
 import { VideoTile } from "@/components/video-tile";
 import { usePageTitle } from "@/hooks/use-page-title";
-import { getSession, type SessionUser, type UserRole } from "@/lib/demo-auth";
+import { type SessionUser, type UserRole } from "@/lib/demo-auth";
 import {
   endLiveClass,
   fetchClassSession,
@@ -63,6 +64,7 @@ export function LiveClassroomRoom({
   role,
 }: LiveClassroomRoomProps) {
   const router = useRouter();
+  const { user, isLoading: isAuthLoading } = useAuth();
   const [session, setSession] = useState<SessionUser | null>(null);
   const [classroom, setClassroom] = useState<LiveClassSession | null>(null);
   const [participants, setParticipants] = useState<ParticipantCard[]>([]);
@@ -387,14 +389,16 @@ export function LiveClassroomRoom({
 
   useEffect(() => {
     async function initializeRoom() {
-      const storedSession = getSession();
+      if (isAuthLoading) {
+        return;
+      }
 
-      if (!storedSession || storedSession.role !== role) {
+      if (!user || user.role !== role) {
         router.replace("/login");
         return;
       }
 
-      setSession(storedSession);
+      setSession(user);
 
       try {
         const classroomSession = await fetchClassSession(classId);
@@ -410,8 +414,8 @@ export function LiveClassroomRoom({
 
         const tokenResponse = await requestLiveKitToken({
           roomName: classId,
-          participantName: storedSession.name,
-          participantEmail: storedSession.email,
+          participantName: user.name,
+          participantEmail: user.email,
           role,
         });
 
@@ -564,7 +568,7 @@ export function LiveClassroomRoom({
         roomRef.current = null;
       }
     };
-  }, [classId, role, router]);
+  }, [classId, role, router, user, isAuthLoading]);
 
   async function handleLeaveOrEndClass() {
     if (!session) {

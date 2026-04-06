@@ -1,6 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth import hash_password, password_needs_rehash
 from app.models import BillingAccount, Classroom, Enrollment, User
 
 
@@ -91,9 +92,18 @@ def seed_demo_data(db: Session) -> None:
         existing_user = db.scalar(select(User).where(User.id == user_data["id"]))
 
         if existing_user:
+            if password_needs_rehash(existing_user.password):
+                existing_user.password = hash_password(user_data["password"])
             continue
 
-        db.add(User(**user_data))
+        db.add(
+            User(
+                **{
+                    **user_data,
+                    "password": hash_password(user_data["password"]),
+                }
+            )
+        )
 
     db.flush()
 

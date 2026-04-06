@@ -157,6 +157,34 @@ class ClassroomPresenceRequest(BaseModel):
     participant_name: str | None = None
 
 
+class AuthLoginRequest(BaseModel):
+    email: str
+    password: str
+    role: Literal["admin", "teacher", "student"]
+
+
+class AuthRegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    role: Literal["teacher", "student"]
+
+
+class AuthUser(BaseModel):
+    user_id: str
+    name: str
+    email: str
+    role: Literal["admin", "teacher", "student"]
+    status: UserStatus
+
+
+class AuthLoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_at: datetime
+    user: AuthUser
+
+
 class BillingPlanFeatures(BaseModel):
     teachers_limit: int
     students_limit: int

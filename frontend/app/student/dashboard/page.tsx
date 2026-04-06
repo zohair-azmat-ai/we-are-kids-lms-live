@@ -3,12 +3,13 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { useAuth } from "@/components/auth-provider";
 import { DashboardShell } from "@/components/dashboard-shell";
-import { getSession } from "@/lib/demo-auth";
 import { fetchLiveClasses, fetchRecordings, type RecordingItem } from "@/lib/api";
 
 export default function StudentDashboardPage() {
   const router = useRouter();
+  const { user } = useAuth();
   const [isJoining, setIsJoining] = useState(false);
   const [error, setError] = useState("");
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
@@ -36,9 +37,7 @@ export default function StudentDashboardPage() {
   }, []);
 
   async function handleJoinClass() {
-    const session = getSession();
-
-    if (!session || session.role !== "student") {
+    if (!user || user.role !== "student") {
       router.replace("/login");
       return;
     }

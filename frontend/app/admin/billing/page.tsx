@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
+import { useAuth } from "@/components/auth-provider";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { LoadingPanel } from "@/components/ui-state";
-import { getSession } from "@/lib/demo-auth";
 import {
   createBillingCheckoutSession,
   createBillingCustomerPortal,
@@ -22,6 +22,7 @@ const planLabels: Record<BillingPlan, string> = {
 
 export default function AdminBillingPage() {
   const router = useRouter();
+  const { user, isLoading: isAuthLoading } = useAuth();
   const searchParams = useSearchParams();
   const [subscription, setSubscription] = useState<BillingSubscription | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -39,9 +40,11 @@ export default function AdminBillingPage() {
 
   useEffect(() => {
     async function loadSubscription() {
-      const session = getSession();
+      if (isAuthLoading) {
+        return;
+      }
 
-      if (!session || session.role !== "admin") {
+      if (!user || user.role !== "admin") {
         router.replace("/login");
         return;
       }
@@ -49,7 +52,7 @@ export default function AdminBillingPage() {
       try {
         setIsLoading(true);
         setError("");
-        const nextSubscription = await fetchBillingSubscription(session.email);
+        const nextSubscription = await fetchBillingSubscription(user.email);
         setSubscription(nextSubscription);
       } catch (requestError) {
         setError(
@@ -63,16 +66,14 @@ export default function AdminBillingPage() {
     }
 
     void loadSubscription();
-  }, [router]);
+  }, [router, user, isAuthLoading]);
 
   const currentPlan = useMemo(() => {
     return subscription?.plans.find((plan) => plan.code === subscription.plan) ?? null;
   }, [subscription]);
 
   async function handlePlanChange(plan: BillingPlan) {
-    const session = getSession();
-
-    if (!session || session.role !== "admin") {
+    if (!user || user.role !== "admin") {
       router.push("/login");
       return;
     }
@@ -81,7 +82,7 @@ export default function AdminBillingPage() {
       setBusyAction(plan);
       setError("");
       const response = await createBillingCheckoutSession({
-        adminEmail: session.email,
+        adminEmail: user.email,
         plan,
       });
       window.location.href = response.checkout_url;
@@ -97,9 +98,7 @@ export default function AdminBillingPage() {
   }
 
   async function handlePortalOpen() {
-    const session = getSession();
-
-    if (!session || session.role !== "admin") {
+    if (!user || user.role !== "admin") {
       router.push("/login");
       return;
     }
@@ -107,7 +106,7 @@ export default function AdminBillingPage() {
     try {
       setBusyAction("portal");
       setError("");
-      const response = await createBillingCustomerPortal({ adminEmail: session.email });
+      const response = await createBillingCustomerPortal({ adminEmail: user.email });
       window.location.href = response.portal_url;
     } catch (requestError) {
       setError(

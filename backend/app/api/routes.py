@@ -3,12 +3,13 @@ from pathlib import Path
 from uuid import uuid4
 
 import stripe
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from livekit.api import AccessToken, VideoGrants
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.auth import authenticate_user, create_access_token, get_current_user, hash_password
 from app.config import (
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
@@ -23,6 +24,10 @@ from app.config import (
 from app.db import SessionLocal
 from app.models import BillingAccount, Classroom, Enrollment, LiveSession, Recording, User
 from app.schemas import (
+    AuthLoginRequest,
+    AuthLoginResponse,
+    AuthRegisterRequest,
+    AuthUser,
     BillingCheckoutRequest,
     BillingCheckoutResponse,
     BillingCustomerPortalRequest,
@@ -119,6 +124,16 @@ def require_stripe_config() -> None:
             status_code=503,
             detail="Billing is not configured yet. Please add Stripe environment variables.",
         )
+
+
+def serialize_auth_user(user: User) -> AuthUser:
+    return AuthUser(
+        user_id=user.id,
+        name=user.name,
+        email=user.email,
+        role=user.role,
+        status=user.status,
+    )
 
 
 def resolve_classroom_user(
@@ -291,8 +306,69 @@ def get_test_payload() -> dict:
     }
 
 
+@api_router.post("/auth/login", response_model=AuthLoginResponse)
+def login(payload: AuthLoginRequest) -> AuthLoginResponse:
+    cleaned_email = payload.email.strip().lower()
+    cleaned_password = payload.password.strip()
+
+    if not cleaned_email or not cleaned_password:
+        raise HTTPException(status_code=400, detail="Email and password are required.")
+
+    with SessionLocal() as db:
+        user = authenticate_user(db, cleaned_email, cleaned_password, payload.role)
+
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid login details. Please check your email, password, and role.",
+            )
+
+        access_token, expires_at = create_access_token(subject=user.email, role=user.role)
+        return AuthLoginResponse(
+            access_token=access_token,
+            expires_at=expires_at,
+            user=serialize_auth_user(user),
+        )
+
+
+@api_router.post("/auth/register", response_model=AuthUser)
+def register(payload: AuthRegisterRequest, current_user: User = Depends(get_current_user)) -> AuthUser:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can create new users.")
+
+    cleaned_name = payload.name.strip()
+    cleaned_email = payload.email.strip().lower()
+    cleaned_password = payload.password.strip()
+
+    if not cleaned_name or not cleaned_email or not cleaned_password:
+        raise HTTPException(status_code=400, detail="Name, email, and password are required.")
+
+    if len(cleaned_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long.")
+
+    with SessionLocal() as db:
+        validate_unique_user_email(db, cleaned_email, payload.role)
+        user = User(
+            id=f"{payload.role}-{uuid4().hex[:8]}",
+            name=cleaned_name,
+            email=normalize_email(cleaned_email),
+            password=hash_password(cleaned_password),
+            role=payload.role,
+            status="active",
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        return serialize_auth_user(user)
+
+
+@api_router.get("/auth/me", response_model=AuthUser)
+def get_auth_me(current_user: User = Depends(get_current_user)) -> AuthUser:
+    return serialize_auth_user(current_user)
+
+
 @api_router.get("/classes/live", response_model=list[LiveClass])
-def get_live_classes() -> list[LiveClass]:
+def get_live_classes(current_user: User = Depends(get_current_user)) -> list[LiveClass]:
     with SessionLocal() as db:
         sessions = db.scalars(
             select(LiveSession)
@@ -312,7 +388,16 @@ def get_live_classes() -> list[LiveClass]:
 
 
 @api_router.post("/classes/start", response_model=LiveClass)
-def start_class_session(payload: StartClassRequest) -> LiveClass:
+def start_class_session(
+    payload: StartClassRequest,
+    current_user: User = Depends(get_current_user),
+) -> LiveClass:
+    if current_user.role != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can start live classes.")
+
+    if normalize_email(payload.teacher_email) != current_user.email:
+        raise HTTPException(status_code=403, detail="Teacher access denied for this class.")
+
     with SessionLocal() as db:
         teacher = get_teacher_by_email(db, payload.teacher_email)
 
@@ -337,7 +422,14 @@ def start_class_session(payload: StartClassRequest) -> LiveClass:
 def end_teacher_class_session(
     class_id: str,
     payload: EndClassRequest,
+    current_user: User = Depends(get_current_user),
 ) -> SuccessResponse:
+    if current_user.role != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can end live classes.")
+
+    if normalize_email(payload.teacher_email) != current_user.email:
+        raise HTTPException(status_code=403, detail="Teacher access denied for this class.")
+
     with SessionLocal() as db:
         classroom = get_class(db, class_id)
 
@@ -361,14 +453,18 @@ def end_teacher_class_session(
 def join_class_presence(
     class_id: str,
     payload: ClassroomPresenceRequest,
+    current_user: User = Depends(get_current_user),
 ) -> LiveClass:
+    if payload.role != current_user.role:
+        raise HTTPException(status_code=403, detail="Classroom role mismatch.")
+
     with SessionLocal() as db:
         validate_classroom_access(
             db,
             class_id=class_id,
             role=payload.role,
-            participant_email=payload.participant_email,
-            participant_name=payload.participant_name,
+            participant_email=current_user.email,
+            participant_name=current_user.name,
             allow_teacher_start=payload.role == "teacher",
         )
 
@@ -384,14 +480,18 @@ def join_class_presence(
 def leave_class_presence(
     class_id: str,
     payload: ClassroomPresenceRequest,
+    current_user: User = Depends(get_current_user),
 ) -> LiveClass:
+    if payload.role != current_user.role:
+        raise HTTPException(status_code=403, detail="Classroom role mismatch.")
+
     with SessionLocal() as db:
         validate_classroom_access(
             db,
             class_id=class_id,
             role=payload.role,
-            participant_email=payload.participant_email,
-            participant_name=payload.participant_name,
+            participant_email=current_user.email,
+            participant_name=current_user.name,
             allow_teacher_start=False,
         )
 
@@ -404,7 +504,20 @@ def leave_class_presence(
 
 
 @api_router.get("/classes/{class_id}", response_model=LiveClass)
-def get_class_session(class_id: str) -> LiveClass:
+def get_class_session(class_id: str, current_user: User = Depends(get_current_user)) -> LiveClass:
+    if current_user.role not in {"teacher", "student"}:
+        raise HTTPException(status_code=403, detail="Classroom access is limited to teachers and students.")
+
+    with SessionLocal() as db:
+        validate_classroom_access(
+            db,
+            class_id=class_id,
+            role=current_user.role,
+            participant_email=current_user.email,
+            participant_name=current_user.name,
+            allow_teacher_start=current_user.role == "teacher",
+        )
+
     session = get_live_or_scheduled_class(class_id)
 
     if not session:
@@ -414,16 +527,21 @@ def get_class_session(class_id: str) -> LiveClass:
 
 
 @api_router.post("/livekit/token", response_model=LiveKitTokenResponse)
-def create_livekit_token(payload: LiveKitTokenRequest) -> LiveKitTokenResponse:
+def create_livekit_token(
+    payload: LiveKitTokenRequest,
+    current_user: User = Depends(get_current_user),
+) -> LiveKitTokenResponse:
     require_livekit_config()
+    if payload.role != current_user.role:
+        raise HTTPException(status_code=403, detail="Classroom role mismatch.")
 
     with SessionLocal() as db:
         classroom, user, _ = validate_classroom_access(
             db,
             class_id=payload.room_name,
             role=payload.role,
-            participant_email=payload.participant_email,
-            participant_name=payload.participant_name,
+            participant_email=current_user.email,
+            participant_name=current_user.name,
             allow_teacher_start=payload.role == "teacher",
         )
 
@@ -452,8 +570,13 @@ def create_livekit_token(payload: LiveKitTokenRequest) -> LiveKitTokenResponse:
 
 
 @api_router.post("/billing/checkout-session", response_model=BillingCheckoutResponse)
-def create_billing_checkout_session(payload: BillingCheckoutRequest) -> BillingCheckoutResponse:
+def create_billing_checkout_session(
+    payload: BillingCheckoutRequest,
+    current_user: User = Depends(get_current_user),
+) -> BillingCheckoutResponse:
     require_stripe_config()
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required for billing.")
 
     price_id = STRIPE_PRICE_MAP.get(payload.plan)
 
@@ -470,6 +593,10 @@ def create_billing_checkout_session(payload: BillingCheckoutRequest) -> BillingC
 
     with SessionLocal() as db:
         admin_user = require_admin_user(db, payload.admin_email)
+
+        if admin_user.email != current_user.email:
+            raise HTTPException(status_code=403, detail="Admin access is required for billing.")
+
         account = get_or_create_billing_account(db)
         account.billing_email = admin_user.email
         db.commit()
@@ -515,9 +642,16 @@ def create_billing_checkout_session(payload: BillingCheckoutRequest) -> BillingC
 
 
 @api_router.get("/billing/subscription", response_model=BillingSubscription)
-def get_billing_subscription(admin_email: str) -> BillingSubscription:
+def get_billing_subscription(
+    admin_email: str,
+    current_user: User = Depends(get_current_user),
+) -> BillingSubscription:
     with SessionLocal() as db:
-        require_admin_user(db, admin_email)
+        admin_user = require_admin_user(db, admin_email)
+
+        if admin_user.email != current_user.email:
+            raise HTTPException(status_code=403, detail="Admin access is required for billing.")
+
         account = get_or_create_billing_account(db)
         return build_billing_subscription(db, account)
 
@@ -525,8 +659,11 @@ def get_billing_subscription(admin_email: str) -> BillingSubscription:
 @api_router.post("/billing/customer-portal", response_model=BillingCustomerPortalResponse)
 def create_customer_portal_session(
     payload: BillingCustomerPortalRequest,
+    current_user: User = Depends(get_current_user),
 ) -> BillingCustomerPortalResponse:
     require_stripe_config()
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required for billing.")
 
     app_url = payload.app_url.rstrip("/")
 
@@ -534,7 +671,11 @@ def create_customer_portal_session(
         raise HTTPException(status_code=400, detail="A valid app URL is required.")
 
     with SessionLocal() as db:
-        require_admin_user(db, payload.admin_email)
+        admin_user = require_admin_user(db, payload.admin_email)
+
+        if admin_user.email != current_user.email:
+            raise HTTPException(status_code=403, detail="Admin access is required for billing.")
+
         account = get_or_create_billing_account(db)
 
         if not account.stripe_customer_id:
@@ -591,12 +732,19 @@ async def upload_recording(
     teacher_name: str = Form(...),
     title: str = Form(...),
     recorded_file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
 ) -> RecordingItem:
+    if current_user.role != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can upload recordings.")
+
     with SessionLocal() as db:
         classroom = get_class(db, class_id)
 
         if not classroom or not classroom.teacher:
             raise HTTPException(status_code=404, detail="Class not found.")
+
+        if classroom.teacher_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Teacher access denied for this class.")
 
         recording_id = uuid4().hex
         file_suffix = Path(recorded_file.filename or "recording.webm").suffix or ".webm"
@@ -623,7 +771,7 @@ async def upload_recording(
 
 
 @api_router.get("/recordings", response_model=list[RecordingItem])
-def get_recordings() -> list[RecordingItem]:
+def get_recordings(current_user: User = Depends(get_current_user)) -> list[RecordingItem]:
     cleanup_expired_recordings()
 
     with SessionLocal() as db:
@@ -636,7 +784,10 @@ def get_recordings() -> list[RecordingItem]:
 
 
 @api_router.get("/recordings/{recording_id}", response_model=RecordingItem)
-def get_recording_by_id(recording_id: str) -> RecordingItem:
+def get_recording_by_id(
+    recording_id: str,
+    current_user: User = Depends(get_current_user),
+) -> RecordingItem:
     with SessionLocal() as db:
         recording = db.scalar(
             select(Recording)
@@ -663,6 +814,7 @@ def get_recording_by_id(recording_id: str) -> RecordingItem:
 def update_recording_by_id(
     recording_id: str,
     payload: RecordingUpdateRequest,
+    current_user: User = Depends(get_current_user),
 ) -> RecordingUpdateResponse:
     cleanup_expired_recordings()
 
@@ -676,6 +828,12 @@ def update_recording_by_id(
         if not recording:
             raise HTTPException(status_code=404, detail="Recording not found.")
 
+        if current_user.role == "teacher" and recording.teacher_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You can only update your own recordings.")
+
+        if current_user.role not in {"admin", "teacher"}:
+            raise HTTPException(status_code=403, detail="You do not have access to update recordings.")
+
         cleaned_title = payload.title.strip()
 
         if not cleaned_title:
@@ -688,7 +846,10 @@ def update_recording_by_id(
 
 
 @api_router.delete("/recordings/{recording_id}", response_model=RecordingDeleteResponse)
-def delete_recording_by_id(recording_id: str) -> RecordingDeleteResponse:
+def delete_recording_by_id(
+    recording_id: str,
+    current_user: User = Depends(get_current_user),
+) -> RecordingDeleteResponse:
     cleanup_expired_recordings()
 
     with SessionLocal() as db:
@@ -697,6 +858,12 @@ def delete_recording_by_id(recording_id: str) -> RecordingDeleteResponse:
         if not recording:
             raise HTTPException(status_code=404, detail="Recording not found.")
 
+        if current_user.role == "teacher" and recording.teacher_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You can only delete your own recordings.")
+
+        if current_user.role not in {"admin", "teacher"}:
+            raise HTTPException(status_code=403, detail="You do not have access to delete recordings.")
+
         delete_recording_file(recording.file_path)
         db.delete(recording)
         db.commit()
@@ -704,7 +871,10 @@ def delete_recording_by_id(recording_id: str) -> RecordingDeleteResponse:
 
 
 @api_router.get("/admin/teachers", response_model=list[TeacherSummary])
-def get_admin_teachers() -> list[TeacherSummary]:
+def get_admin_teachers(current_user: User = Depends(get_current_user)) -> list[TeacherSummary]:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
     with SessionLocal() as db:
         teachers = db.scalars(
             select(User).where(User.role == "teacher").order_by(User.name.asc())
@@ -713,15 +883,24 @@ def get_admin_teachers() -> list[TeacherSummary]:
 
 
 @api_router.post("/admin/teachers", response_model=TeacherSummary)
-def create_admin_teacher(payload: TeacherCreateRequest) -> TeacherSummary:
+def create_admin_teacher(
+    payload: TeacherCreateRequest,
+    current_user: User = Depends(get_current_user),
+) -> TeacherSummary:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
     with SessionLocal() as db:
+        if not payload.password.strip():
+            raise HTTPException(status_code=400, detail="Teacher password is required.")
+
         require_plan_capacity(db, "teachers")
         validate_unique_user_email(db, payload.email, "teacher")
         teacher = User(
             id=f"teacher-{uuid4().hex[:8]}",
             name=payload.name.strip(),
             email=normalize_email(payload.email),
-            password=payload.password.strip(),
+            password=hash_password(payload.password.strip()),
             role="teacher",
             status=payload.status,
         )
@@ -735,17 +914,24 @@ def create_admin_teacher(payload: TeacherCreateRequest) -> TeacherSummary:
 def update_admin_teacher(
     teacher_id: str,
     payload: TeacherUpdateRequest,
+    current_user: User = Depends(get_current_user),
 ) -> TeacherSummary:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
     with SessionLocal() as db:
         teacher = get_teacher(db, teacher_id)
 
         if not teacher:
             raise HTTPException(status_code=404, detail="Teacher not found.")
 
+        if not payload.password.strip():
+            raise HTTPException(status_code=400, detail="Teacher password is required.")
+
         validate_unique_user_email(db, payload.email, "teacher", exclude_user_id=teacher_id)
         teacher.name = payload.name.strip()
         teacher.email = normalize_email(payload.email)
-        teacher.password = payload.password.strip()
+        teacher.password = hash_password(payload.password.strip())
         teacher.status = payload.status
         db.commit()
         db.refresh(teacher)
@@ -753,7 +939,13 @@ def update_admin_teacher(
 
 
 @api_router.delete("/admin/teachers/{teacher_id}", response_model=SuccessResponse)
-def delete_admin_teacher(teacher_id: str) -> SuccessResponse:
+def delete_admin_teacher(
+    teacher_id: str,
+    current_user: User = Depends(get_current_user),
+) -> SuccessResponse:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
     with SessionLocal() as db:
         teacher = get_teacher(db, teacher_id)
 
@@ -771,7 +963,10 @@ def delete_admin_teacher(teacher_id: str) -> SuccessResponse:
 
 
 @api_router.get("/admin/students", response_model=list[StudentSummary])
-def get_admin_students() -> list[StudentSummary]:
+def get_admin_students(current_user: User = Depends(get_current_user)) -> list[StudentSummary]:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
     with SessionLocal() as db:
         students = db.scalars(
             select(User).where(User.role == "student").order_by(User.name.asc())
@@ -780,15 +975,24 @@ def get_admin_students() -> list[StudentSummary]:
 
 
 @api_router.post("/admin/students", response_model=StudentSummary)
-def create_admin_student(payload: StudentCreateRequest) -> StudentSummary:
+def create_admin_student(
+    payload: StudentCreateRequest,
+    current_user: User = Depends(get_current_user),
+) -> StudentSummary:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
     with SessionLocal() as db:
+        if not payload.password.strip():
+            raise HTTPException(status_code=400, detail="Student password is required.")
+
         require_plan_capacity(db, "students")
         validate_unique_user_email(db, payload.email, "student")
         student = User(
             id=f"student-{uuid4().hex[:8]}",
             name=payload.name.strip(),
             email=normalize_email(payload.email),
-            password=payload.password.strip(),
+            password=hash_password(payload.password.strip()),
             role="student",
             status=payload.status,
         )
@@ -802,17 +1006,24 @@ def create_admin_student(payload: StudentCreateRequest) -> StudentSummary:
 def update_admin_student(
     student_id: str,
     payload: StudentUpdateRequest,
+    current_user: User = Depends(get_current_user),
 ) -> StudentSummary:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
     with SessionLocal() as db:
         student = get_student(db, student_id)
 
         if not student:
             raise HTTPException(status_code=404, detail="Student not found.")
 
+        if not payload.password.strip():
+            raise HTTPException(status_code=400, detail="Student password is required.")
+
         validate_unique_user_email(db, payload.email, "student", exclude_user_id=student_id)
         student.name = payload.name.strip()
         student.email = normalize_email(payload.email)
-        student.password = payload.password.strip()
+        student.password = hash_password(payload.password.strip())
         student.status = payload.status
         db.commit()
         db.refresh(student)
@@ -820,7 +1031,13 @@ def update_admin_student(
 
 
 @api_router.delete("/admin/students/{student_id}", response_model=SuccessResponse)
-def delete_admin_student(student_id: str) -> SuccessResponse:
+def delete_admin_student(
+    student_id: str,
+    current_user: User = Depends(get_current_user),
+) -> SuccessResponse:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
     with SessionLocal() as db:
         student = get_student(db, student_id)
 
@@ -833,7 +1050,10 @@ def delete_admin_student(student_id: str) -> SuccessResponse:
 
 
 @api_router.get("/admin/classes", response_model=list[ClassSummary])
-def get_admin_classes() -> list[ClassSummary]:
+def get_admin_classes(current_user: User = Depends(get_current_user)) -> list[ClassSummary]:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
     with SessionLocal() as db:
         classes = db.scalars(
             select(Classroom)
@@ -847,7 +1067,13 @@ def get_admin_classes() -> list[ClassSummary]:
 
 
 @api_router.post("/admin/classes", response_model=ClassSummary)
-def create_admin_class(payload: ClassCreateRequest) -> ClassSummary:
+def create_admin_class(
+    payload: ClassCreateRequest,
+    current_user: User = Depends(get_current_user),
+) -> ClassSummary:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
     with SessionLocal() as db:
         require_plan_capacity(db, "classes")
         validate_class_relationships(db, payload.teacher_id, payload.student_ids)
@@ -876,7 +1102,11 @@ def create_admin_class(payload: ClassCreateRequest) -> ClassSummary:
 def update_admin_class(
     class_id: str,
     payload: ClassUpdateRequest,
+    current_user: User = Depends(get_current_user),
 ) -> ClassSummary:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
     with SessionLocal() as db:
         classroom = get_class(db, class_id)
 
@@ -910,7 +1140,13 @@ def update_admin_class(
 
 
 @api_router.delete("/admin/classes/{class_id}", response_model=SuccessResponse)
-def delete_admin_class(class_id: str) -> SuccessResponse:
+def delete_admin_class(
+    class_id: str,
+    current_user: User = Depends(get_current_user),
+) -> SuccessResponse:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
     with SessionLocal() as db:
         classroom = get_class(db, class_id)
 
@@ -926,7 +1162,12 @@ def delete_admin_class(class_id: str) -> SuccessResponse:
 
 
 @api_router.get("/admin/live-sessions", response_model=list[LiveSessionSummary])
-def get_admin_live_sessions() -> list[LiveSessionSummary]:
+def get_admin_live_sessions(
+    current_user: User = Depends(get_current_user),
+) -> list[LiveSessionSummary]:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
     with SessionLocal() as db:
         live_sessions = db.scalars(
             select(LiveSession)
@@ -937,7 +1178,13 @@ def get_admin_live_sessions() -> list[LiveSessionSummary]:
 
 
 @api_router.post("/admin/live-sessions/{class_id}/end", response_model=SuccessResponse)
-def end_admin_live_session(class_id: str) -> SuccessResponse:
+def end_admin_live_session(
+    class_id: str,
+    current_user: User = Depends(get_current_user),
+) -> SuccessResponse:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
     session = mark_class_as_ended(class_id)
 
     if not session or session.status != "ended":

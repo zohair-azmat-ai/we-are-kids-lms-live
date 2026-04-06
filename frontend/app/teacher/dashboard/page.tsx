@@ -3,13 +3,14 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { useAuth } from "@/components/auth-provider";
 import { DashboardShell } from "@/components/dashboard-shell";
-import { getSession } from "@/lib/demo-auth";
 import { fetchRecordings, startLiveClass, type RecordingItem } from "@/lib/api";
 import { getRecordingStatus } from "@/lib/recordings";
 
 export default function TeacherDashboardPage() {
   const router = useRouter();
+  const { user } = useAuth();
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState("");
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
@@ -37,9 +38,7 @@ export default function TeacherDashboardPage() {
   }, []);
 
   async function handleStartLiveClass() {
-    const session = getSession();
-
-    if (!session || session.role !== "teacher") {
+    if (!user || user.role !== "teacher") {
       router.replace("/login");
       return;
     }
@@ -48,7 +47,7 @@ export default function TeacherDashboardPage() {
       setIsStarting(true);
       setError("");
 
-      const classroom = await startLiveClass(session.email);
+      const classroom = await startLiveClass(user.email);
       router.push(`/teacher/classroom/${classroom.class_id}`);
     } catch (requestError) {
       setError(

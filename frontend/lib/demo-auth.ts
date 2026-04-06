@@ -1,99 +1,30 @@
 export type UserRole = "admin" | "teacher" | "student";
 
-export type DemoUser = {
+export type SessionUser = {
+  user_id: string;
   email: string;
-  password: string;
   role: UserRole;
   name: string;
+  status: "active" | "inactive";
 };
 
-export type SessionUser = {
-  email: string;
-  role: UserRole;
-  name: string;
+export type StoredSession = {
+  access_token: string;
+  expires_at: string;
+  user: SessionUser;
 };
 
 export const SESSION_STORAGE_KEY = "we-are-kids-session";
 
-export const demoUsers: DemoUser[] = [
-  {
-    email: "admin@wearekids.com",
-    password: "123456",
-    role: "admin",
-    name: "Admin Team",
-  },
-  {
-    email: "teacher1@wearekids.com",
-    password: "123456",
-    role: "teacher",
-    name: "Teacher One",
-  },
-  {
-    email: "teacher2@wearekids.com",
-    password: "123456",
-    role: "teacher",
-    name: "Teacher Two",
-  },
-  {
-    email: "student1@wearekids.com",
-    password: "123456",
-    role: "student",
-    name: "Student One",
-  },
-  {
-    email: "student2@wearekids.com",
-    password: "123456",
-    role: "student",
-    name: "Student Two",
-  },
-  {
-    email: "student3@wearekids.com",
-    password: "123456",
-    role: "student",
-    name: "Student Three",
-  },
-  {
-    email: "student4@wearekids.com",
-    password: "123456",
-    role: "student",
-    name: "Student Four",
-  },
-];
-
-export function authenticateDemoUser(
-  email: string,
-  password: string,
-  role: UserRole,
-): SessionUser | null {
-  const normalizedEmail = email.trim().toLowerCase();
-
-  const user = demoUsers.find(
-    (item) =>
-      item.email === normalizedEmail &&
-      item.password === password &&
-      item.role === role,
-  );
-
-  if (!user) {
-    return null;
-  }
-
-  return {
-    email: user.email,
-    role: user.role,
-    name: user.name,
-  };
-}
-
-export function saveSession(user: SessionUser): void {
+export function saveSession(session: StoredSession): void {
   if (typeof window === "undefined") {
     return;
   }
 
-  window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user));
+  window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
 }
 
-export function getSession(): SessionUser | null {
+export function getStoredSession(): StoredSession | null {
   if (typeof window === "undefined") {
     return null;
   }
@@ -105,10 +36,24 @@ export function getSession(): SessionUser | null {
   }
 
   try {
-    return JSON.parse(rawSession) as SessionUser;
+    return JSON.parse(rawSession) as StoredSession;
   } catch {
     return null;
   }
+}
+
+export function getSession(): SessionUser | null {
+  const storedSession = getStoredSession();
+
+  if (!storedSession) {
+    return null;
+  }
+
+  return storedSession.user;
+}
+
+export function getAccessToken(): string {
+  return getStoredSession()?.access_token ?? "";
 }
 
 export function clearSession(): void {

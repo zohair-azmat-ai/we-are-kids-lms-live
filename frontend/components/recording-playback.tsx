@@ -4,10 +4,10 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 
 import { DashboardShell } from "@/components/dashboard-shell";
+import { useAuth } from "@/components/auth-provider";
 import { LoadingPanel } from "@/components/ui-state";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { fetchRecording, getAssetUrl, type RecordingItem } from "@/lib/api";
-import { getSession } from "@/lib/demo-auth";
 
 type RecordingPlaybackProps = {
   allowedRole: "teacher" | "admin" | "student";
@@ -21,6 +21,7 @@ export function RecordingPlayback({
   subtitle,
 }: RecordingPlaybackProps) {
   const params = useParams<{ recordingId: string }>();
+  const { user } = useAuth();
   const [recording, setRecording] = useState<RecordingItem | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -34,15 +35,13 @@ export function RecordingPlayback({
         const recordingItem = await fetchRecording(params.recordingId);
 
         if (allowedRole === "teacher") {
-          const currentSession = getSession();
-
-          if (!currentSession || currentSession.role !== "teacher") {
+          if (!user || user.role !== "teacher") {
             setError("Unable to verify teacher access for this recording.");
             setRecording(null);
             return;
           }
 
-          if (recordingItem.teacher !== currentSession.name) {
+          if (recordingItem.teacher !== user.name) {
             setError("You can only watch your own recordings.");
             setRecording(null);
             return;
@@ -62,7 +61,7 @@ export function RecordingPlayback({
     }
 
     void loadRecording();
-  }, [params.recordingId]);
+  }, [params.recordingId, allowedRole, user]);
 
   return (
     <DashboardShell

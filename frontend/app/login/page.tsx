@@ -5,16 +5,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { useAuth } from "@/components/auth-provider";
 import { SiteHeader } from "@/components/site-header";
 import { Spinner } from "@/components/ui-state";
 import { usePageTitle } from "@/hooks/use-page-title";
 import {
-  authenticateDemoUser,
-  demoUsers,
-  getSession,
-  saveSession,
   type UserRole,
 } from "@/lib/demo-auth";
+import { loginWithPassword } from "@/lib/api";
 
 const roles: UserRole[] = ["admin", "teacher", "student"];
 
@@ -26,6 +24,7 @@ const roleRedirects: Record<UserRole, string> = {
 
 export default function LoginPage() {
   const router = useRouter();
+  const { user, isLoading, login } = useAuth();
   const [role, setRole] = useState<UserRole>("admin");
   const [email, setEmail] = useState("admin@wearekids.com");
   const [password, setPassword] = useState("123456");
@@ -35,23 +34,22 @@ export default function LoginPage() {
   usePageTitle("Login");
 
   useEffect(() => {
-    const existingSession = getSession();
-
-    if (existingSession) {
-      router.replace(roleRedirects[existingSession.role]);
+    if (!isLoading && user) {
+      router.replace(roleRedirects[user.role]);
     }
-  }, [router]);
+  }, [isLoading, router, user]);
 
   function handleRoleChange(nextRole: UserRole) {
     setRole(nextRole);
     setError("");
-
-    const defaultUser = demoUsers.find((user) => user.role === nextRole);
-
-    if (defaultUser) {
-      setEmail(defaultUser.email);
-      setPassword(defaultUser.password);
-    }
+    setEmail(
+      nextRole === "admin"
+        ? "admin@wearekids.com"
+        : nextRole === "teacher"
+          ? "teacher1@wearekids.com"
+          : "student1@wearekids.com",
+    );
+    setPassword("123456");
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -73,16 +71,23 @@ export default function LoginPage() {
     setIsSubmitting(true);
     setError("");
 
-    const session = authenticateDemoUser(trimmedEmail, trimmedPassword, role);
-
-    if (!session) {
-      setError("Please check the selected role, email, and password.");
+    try {
+      const session = await loginWithPassword({
+        email: trimmedEmail,
+        password: trimmedPassword,
+        role,
+      });
+      login(session);
+      router.push(roleRedirects[session.user.role]);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to sign in right now.",
+      );
+    } finally {
       setIsSubmitting(false);
-      return;
     }
-
-    saveSession(session);
-    router.push(roleRedirects[session.role]);
   }
 
   return (
@@ -111,7 +116,7 @@ export default function LoginPage() {
                     We Are Kids Nursery
                   </p>
                   <p className="text-sm text-slate-500">
-                    Demo access for admin, teacher, and student roles
+                    Secure access for admin, teacher, and student roles
                   </p>
                 </div>
               </div>
@@ -146,14 +151,12 @@ export default function LoginPage() {
 
               <div className="mt-10 rounded-[2rem] border border-slate-100 bg-slate-50 p-5">
                 <p className="text-sm font-semibold text-slate-800">
-                  Demo accounts
+                  Seeded starter accounts
                 </p>
                 <div className="mt-4 space-y-3 text-sm text-slate-600">
-                  {demoUsers.map((user) => (
-                    <p key={user.email}>
-                      {user.email} / 123456 / {user.role}
-                    </p>
-                  ))}
+                  <p>admin@wearekids.com / 123456 / admin</p>
+                  <p>teacher1@wearekids.com / 123456 / teacher</p>
+                  <p>student1@wearekids.com / 123456 / student</p>
                 </div>
               </div>
             </div>
