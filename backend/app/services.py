@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
@@ -16,11 +16,14 @@ from app.schemas import (
     BillingSubscription,
     BillingUsageMetric,
     BillingUsageSummary,
+    ActivityPoint,
+    AdminAnalyticsResponse,
     ClassSummary,
     LiveClass,
     LiveSessionSummary,
     RecordingItem,
     StudentSummary,
+    TeacherAnalyticsResponse,
     TeacherSummary,
 )
 
@@ -616,6 +619,122 @@ def build_billing_subscription(db: Session, account: BillingAccount) -> BillingS
         teachers_count=usage["teachers_count"],
         students_count=usage["students_count"],
         classes_count=usage["classes_count"],
+    )
+
+
+def build_recent_activity_points(
+    source_dates: list[datetime | None],
+    *,
+    days: int = 7,
+) -> list[ActivityPoint]:
+    today = utc_now().date()
+    counts: dict[str, int] = {}
+
+    for offset in range(days - 1, -1, -1):
+        label = (today - timedelta(days=offset)).strftime("%a")
+        counts[label] = 0
+
+    for item in source_dates:
+        if not item:
+            continue
+
+        item_date = item.date()
+        delta = (today - item_date).days
+
+        if 0 <= delta < days:
+            label = item_date.strftime("%a")
+            counts[label] = counts.get(label, 0) + 1
+
+    return [ActivityPoint(label=label, value=value) for label, value in counts.items()]
+
+
+def build_admin_analytics(db: Session) -> AdminAnalyticsResponse:
+    account = get_or_create_billing_account(db)
+    plan_usage_summary = build_billing_usage_summary(db, account)
+    teachers = db.scalars(select(User).where(User.role == "teacher")).all()
+    students = db.scalars(select(User).where(User.role == "student")).all()
+    classes = db.scalars(select(Classroom)).all()
+    live_sessions = db.scalars(select(LiveSession)).all()
+    recordings = db.scalars(select(Recording)).all()
+
+    active_classes = len([classroom for classroom in classes if classroom.status == "active"])
+    active_students = len([student for student in students if student.status == "active"])
+    live_sessions_count = len([session for session in live_sessions if session.status == "live"])
+
+    class_sizes = [
+        len(db.scalars(select(Enrollment.student_id).where(Enrollment.class_id == classroom.id)).all())
+        for classroom in classes
+    ]
+    full_threshold = 8
+    filled_classes = len([size for size in class_sizes if size >= full_threshold])
+    class_fill_ratio = 0 if not classes else round((filled_classes / len(classes)) * 100)
+
+    recent_live_sessions = [session.started_at for session in live_sessions]
+    recent_recordings = [recording.created_at for recording in recordings]
+    recent_live_points = build_recent_activity_points(recent_live_sessions)
+    recent_recording_points = build_recent_activity_points(recent_recordings)
+
+    change_total = sum(point.value for point in recent_live_points[-3:]) + sum(
+        point.value for point in recent_recording_points[-3:]
+    )
+    activity_change_label = (
+        "Activity is trending up this week."
+        if change_total >= 3
+        else "Activity is steady. Encourage more live sessions for a stronger demo."
+    )
+
+    return AdminAnalyticsResponse(
+        total_users=len(teachers) + len(students) + len(db.scalars(select(User).where(User.role == "admin")).all()),
+        total_teachers=len(teachers),
+        total_students=len(students),
+        active_classes=active_classes,
+        live_sessions_count=live_sessions_count,
+        recordings_count=len(recordings),
+        active_students=active_students,
+        activity_change_label=activity_change_label,
+        class_fill_ratio=class_fill_ratio,
+        plan_usage_summary=plan_usage_summary,
+        live_activity_points=recent_live_points,
+        recording_activity_points=recent_recording_points,
+    )
+
+
+def build_teacher_analytics(db: Session, teacher: User) -> TeacherAnalyticsResponse:
+    classes = db.scalars(
+        select(Classroom).where(Classroom.teacher_id == teacher.id).order_by(Classroom.title.asc())
+    ).all()
+    live_sessions = db.scalars(
+        select(LiveSession).where(LiveSession.teacher_id == teacher.id).order_by(LiveSession.started_at.desc())
+    ).all()
+    recordings = db.scalars(
+        select(Recording).where(Recording.teacher_id == teacher.id).order_by(Recording.created_at.desc())
+    ).all()
+
+    class_ids = [classroom.id for classroom in classes]
+    enrollments = db.scalars(
+        select(Enrollment).where(Enrollment.class_id.in_(class_ids))
+    ).all() if class_ids else []
+    student_ids = list({enrollment.student_id for enrollment in enrollments})
+    students = db.scalars(
+        select(User).where(User.id.in_(student_ids))
+    ).all() if student_ids else []
+    active_students = len([student for student in students if student.status == "active"])
+    average_class_size = 0 if not classes else round(len(enrollments) / len(classes))
+    participation_summary = (
+        f"{active_students} active learners across {len(classes)} assigned classes."
+        if classes
+        else "No classes assigned yet. Add a class to begin tracking participation."
+    )
+
+    return TeacherAnalyticsResponse(
+        assigned_classes=len(classes),
+        live_sessions_run=len(live_sessions),
+        recordings_created=len(recordings),
+        enrolled_students=len(student_ids),
+        active_students=active_students,
+        average_class_size=average_class_size,
+        participation_summary=participation_summary,
+        live_activity_points=build_recent_activity_points([session.started_at for session in live_sessions]),
     )
 
 

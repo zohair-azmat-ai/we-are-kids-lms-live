@@ -3,7 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import api_router
-from app.config import CORS_ORIGINS, ENV, LIVEKIT_URL, PORT, STRIPE_SECRET_KEY, UPLOAD_DIR
+from app.config import (
+    CORS_ORIGINS,
+    ENV,
+    LIVEKIT_URL,
+    OPENAI_API_KEY,
+    PORT,
+    STRIPE_SECRET_KEY,
+    UPLOAD_DIR,
+)
 from app.db import SessionLocal, engine
 from app.models import Base
 from app.seed import seed_demo_data
@@ -37,6 +45,7 @@ def read_root() -> dict:
         "health": "/health",
         "livekit_configured": bool(LIVEKIT_URL),
         "billing_configured": bool(STRIPE_SECRET_KEY),
+        "ai_configured": bool(OPENAI_API_KEY),
     }
 
 
@@ -50,6 +59,7 @@ def read_health() -> dict:
         "port": PORT,
         "livekit_configured": bool(LIVEKIT_URL),
         "billing_configured": bool(STRIPE_SECRET_KEY),
+        "ai_configured": bool(OPENAI_API_KEY),
     }
 
 

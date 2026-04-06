@@ -33,6 +33,7 @@ from app.schemas import (
     AuthLoginResponse,
     AuthRegisterRequest,
     AuthUser,
+    AdminAnalyticsResponse,
     BillingCheckoutRequest,
     BillingCheckoutResponse,
     BillingCustomerPortalRequest,
@@ -56,6 +57,7 @@ from app.schemas import (
     StartClassRequest,
     StudentCreateRequest,
     StudentSummary,
+    TeacherAnalyticsResponse,
     StudentUpdateRequest,
     SuccessResponse,
     TeacherCreateRequest,
@@ -65,11 +67,13 @@ from app.schemas import (
 from app.services import (
     build_billing_subscription,
     build_billing_usage_summary,
+    build_admin_analytics,
     build_class_summary,
     build_live_class_response,
     build_live_session_summary,
     build_student_summary,
     build_teacher_summary,
+    build_teacher_analytics,
     cleanup_expired_recordings,
     delete_recording_file,
     get_active_session_for_class,
@@ -1246,6 +1250,17 @@ def get_admin_live_sessions(
         return [build_live_session_summary(db, session) for session in live_sessions]
 
 
+@api_router.get("/admin/analytics", response_model=AdminAnalyticsResponse)
+def get_admin_analytics(
+    current_user: User = Depends(get_current_user),
+) -> AdminAnalyticsResponse:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
+    with SessionLocal() as db:
+        return build_admin_analytics(db)
+
+
 @api_router.post("/admin/live-sessions/{class_id}/end", response_model=SuccessResponse)
 def end_admin_live_session(
     class_id: str,
@@ -1260,3 +1275,19 @@ def end_admin_live_session(
         raise HTTPException(status_code=404, detail="Live session not found.")
 
     return SuccessResponse(success=True, message="Live session ended successfully.")
+
+
+@api_router.get("/teacher/analytics", response_model=TeacherAnalyticsResponse)
+def get_teacher_analytics(
+    current_user: User = Depends(get_current_user),
+) -> TeacherAnalyticsResponse:
+    if current_user.role != "teacher":
+        raise HTTPException(status_code=403, detail="Teacher access is required.")
+
+    with SessionLocal() as db:
+        teacher = get_teacher_by_email(db, current_user.email)
+
+        if not teacher:
+            raise HTTPException(status_code=404, detail="Teacher not found.")
+
+        return build_teacher_analytics(db, teacher)

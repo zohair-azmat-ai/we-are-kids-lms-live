@@ -271,6 +271,37 @@ class AIInsightsResponse(BaseModel):
     items: list[AIInsightItem]
 
 
+class ActivityPoint(BaseModel):
+    label: str
+    value: int
+
+
+class AdminAnalyticsResponse(BaseModel):
+    total_users: int
+    total_teachers: int
+    total_students: int
+    active_classes: int
+    live_sessions_count: int
+    recordings_count: int
+    active_students: int
+    activity_change_label: str
+    class_fill_ratio: int
+    plan_usage_summary: BillingUsageSummary
+    live_activity_points: list[ActivityPoint]
+    recording_activity_points: list[ActivityPoint]
+
+
+class TeacherAnalyticsResponse(BaseModel):
+    assigned_classes: int
+    live_sessions_run: int
+    recordings_created: int
+    enrolled_students: int
+    active_students: int
+    average_class_size: int
+    participation_summary: str
+    live_activity_points: list[ActivityPoint]
+
+
 class BillingCheckoutRequest(BaseModel):
     admin_email: str
     plan: BillingPlan

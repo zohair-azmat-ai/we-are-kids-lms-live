@@ -8,12 +8,15 @@ type Message = {
   id: string;
   role: "assistant" | "user";
   text: string;
+  suggestions?: string[];
+  source?: "openai" | "fallback";
 };
 
 const starterQuestions = [
   "How many students are active?",
   "Which classes are full?",
   "Show usage summary",
+  "What should I demo next?",
 ];
 
 export function AIAssistantChat() {
@@ -49,16 +52,15 @@ export function AIAssistantChat() {
     try {
       setIsSending(true);
       const response = await postAIChat(prompt);
-      const assistantText = response.suggestions.length
-        ? `${response.answer}\n\nTry next: ${response.suggestions.join(" | ")}`
-        : response.answer;
 
       setMessages((current) => [
         ...current,
         {
           id: `assistant-${Date.now()}`,
           role: "assistant",
-          text: assistantText,
+          text: response.answer,
+          suggestions: response.suggestions,
+          source: response.source,
         },
       ]);
     } catch (requestError) {
@@ -104,12 +106,41 @@ export function AIAssistantChat() {
                     : "bg-blue-600 text-white"
                 }`}
               >
-                <p className="whitespace-pre-line">{message.text}</p>
+                {message.role === "assistant" ? (
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs font-semibold uppercase tracking-[0.22em] text-violet-600">
+                      Assistant
+                    </span>
+                    {message.source ? (
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        {message.source}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                <p className="mt-2 whitespace-pre-line">{message.text}</p>
+                {message.suggestions?.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {message.suggestions.map((item) => (
+                      <button
+                        key={`${message.id}-${item}`}
+                        type="button"
+                        onClick={() => void handleSend(item)}
+                        className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-semibold text-slate-700"
+                      >
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ))}
             {isSending ? (
               <div className="rounded-2xl bg-white px-4 py-3 text-sm text-slate-500">
-                Thinking...
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-violet-600">
+                  Assistant
+                </p>
+                <p className="mt-2 animate-pulse">Thinking through your school data...</p>
               </div>
             ) : null}
           </div>
@@ -154,7 +185,7 @@ export function AIAssistantChat() {
               disabled={isSending}
               className="rounded-full bg-red-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-red-100 disabled:opacity-70"
             >
-              Send
+              {isSending ? "Sending..." : "Send"}
             </button>
           </div>
         </section>

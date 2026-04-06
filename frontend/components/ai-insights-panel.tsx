@@ -11,6 +11,12 @@ const severityStyles = {
   critical: "border-red-100 bg-red-50 text-red-900",
 } as const;
 
+const severityLabels = {
+  info: "Recommendation",
+  warning: "Priority",
+  critical: "Urgent",
+} as const;
+
 type AIInsightsPanelProps = {
   title?: string;
 };
@@ -80,9 +86,14 @@ export function AIInsightsPanel({
                 key={item.id}
                 className={`rounded-[1.75rem] border p-4 ${severityStyles[item.severity]}`}
               >
-                <p className="text-xs font-semibold uppercase tracking-[0.22em]">
-                  {item.severity}
-                </p>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em]">
+                    {severityLabels[item.severity]}
+                  </p>
+                  <span className="rounded-full border border-current px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em]">
+                    {item.severity}
+                  </span>
+                </div>
                 <h3 className="mt-2 text-lg font-semibold">{item.title}</h3>
                 <p className="mt-3 text-sm leading-7">{item.message}</p>
                 {item.cta_label && item.cta_href ? (

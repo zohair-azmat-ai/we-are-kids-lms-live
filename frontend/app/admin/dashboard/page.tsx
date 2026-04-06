@@ -5,7 +5,11 @@ import { useRouter } from "next/navigation";
 
 import { DashboardShell } from "@/components/dashboard-shell";
 import { AIInsightsPanel } from "@/components/ai-insights-panel";
+import { AdminDemoHelpCard } from "@/components/admin-demo-help-card";
+import { AdminSystemStatusCard } from "@/components/admin-system-status-card";
+import { AnalyticsBarChart } from "@/components/analytics-bar-chart";
 import {
+  fetchAdminAnalytics,
   fetchAdminClasses,
   fetchAdminLiveSessions,
   fetchAdminStudents,
@@ -13,6 +17,7 @@ import {
   fetchBillingUsage,
   fetchRecordings,
   type AdminLiveSession,
+  type AdminAnalyticsResponse,
   type BillingUsageSummary,
   type RecordingItem,
 } from "@/lib/api";
@@ -30,6 +35,7 @@ export default function AdminDashboardPage() {
   const [recordingsError, setRecordingsError] = useState("");
   const [overviewError, setOverviewError] = useState("");
   const [usage, setUsage] = useState<BillingUsageSummary | null>(null);
+  const [analytics, setAnalytics] = useState<AdminAnalyticsResponse | null>(null);
   const [isLoadingOverview, setIsLoadingOverview] = useState(true);
   const [isLoadingRecordings, setIsLoadingRecordings] = useState(true);
 
@@ -37,18 +43,20 @@ export default function AdminDashboardPage() {
     async function loadOverview() {
       try {
         setIsLoadingOverview(true);
-        const [teachers, students, classes, liveSessionsResponse, usageResponse] = await Promise.all([
+        const [teachers, students, classes, liveSessionsResponse, usageResponse, analyticsResponse] = await Promise.all([
           fetchAdminTeachers(),
           fetchAdminStudents(),
           fetchAdminClasses(),
           fetchAdminLiveSessions(),
           user ? fetchBillingUsage(user.email) : Promise.resolve(null),
+          fetchAdminAnalytics(),
         ]);
         setTeacherCount(teachers.length);
         setStudentCount(students.length);
         setClassCount(classes.length);
         setLiveSessions(liveSessionsResponse);
         setUsage(usageResponse);
+        setAnalytics(analyticsResponse);
       } catch (requestError) {
         setOverviewError(
           requestError instanceof Error
@@ -166,6 +174,89 @@ export default function AdminDashboardPage() {
         </article>
       </div>
 
+      {analytics ? (
+        <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">
+                Analytics Overview
+              </p>
+              <h2 className="mt-2 text-2xl font-semibold text-slate-800">
+                Growth, activity, and plan signals
+              </h2>
+            </div>
+            <p className="text-sm text-slate-500">{analytics.activity_change_label}</p>
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-3 xl:grid-cols-6">
+            {[
+              { label: "Total Users", value: analytics.total_users, accent: "text-blue-600" },
+              { label: "Teachers", value: analytics.total_teachers, accent: "text-sky-600" },
+              { label: "Students", value: analytics.total_students, accent: "text-red-500" },
+              { label: "Active Classes", value: analytics.active_classes, accent: "text-amber-600" },
+              { label: "Live Now", value: analytics.live_sessions_count, accent: "text-emerald-600" },
+              { label: "Recordings", value: analytics.recordings_count, accent: "text-violet-600" },
+            ].map((item) => (
+              <article
+                key={item.label}
+                className="rounded-[1.75rem] border border-slate-100 bg-slate-50 p-4"
+              >
+                <p className={`text-xs font-semibold uppercase tracking-[0.22em] ${item.accent}`}>
+                  {item.label}
+                </p>
+                <p className="mt-3 text-3xl font-semibold text-slate-800">{item.value}</p>
+              </article>
+            ))}
+          </div>
+
+          <div className="mt-5 grid gap-4 xl:grid-cols-[1fr_1fr_0.9fr]">
+            <AnalyticsBarChart
+              title="Live Sessions"
+              subtitle="Last 7 days"
+              points={analytics.live_activity_points}
+              accentClassName="bg-blue-600"
+            />
+            <AnalyticsBarChart
+              title="Recording Activity"
+              subtitle="Last 7 days"
+              points={analytics.recording_activity_points}
+              accentClassName="bg-emerald-500"
+            />
+            <section className="rounded-[1.85rem] border border-slate-100 bg-slate-50 p-5">
+              <p className="text-sm font-semibold text-slate-800">Plan usage summary</p>
+              <div className="mt-4 space-y-4">
+                {[
+                  { label: "Teachers", metric: analytics.plan_usage_summary.teachers },
+                  { label: "Students", metric: analytics.plan_usage_summary.students },
+                  { label: "Classes", metric: analytics.plan_usage_summary.classes },
+                ].map(({ label, metric }) => (
+                  <div key={label}>
+                    <div className="flex items-center justify-between text-sm text-slate-700">
+                      <span>{label}</span>
+                      <span>
+                        {metric.current} / {metric.limit ?? "Unlimited"}
+                      </span>
+                    </div>
+                    <div className="mt-2 h-3 overflow-hidden rounded-full bg-white">
+                      <div
+                        className="h-full rounded-full bg-blue-600"
+                        style={{ width: `${metric.is_unlimited ? 24 : metric.percent_used}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+                <div className="rounded-2xl border border-white bg-white px-4 py-4 text-sm text-slate-700">
+                  Active students: {analytics.active_students}
+                </div>
+                <div className="rounded-2xl border border-white bg-white px-4 py-4 text-sm text-slate-700">
+                  Class fill ratio: {analytics.class_fill_ratio}%
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+      ) : null}
+
       {usage ? (
         <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -244,6 +335,11 @@ export default function AdminDashboardPage() {
 
       <div className="mt-8">
         <AIInsightsPanel />
+      </div>
+
+      <div className="mt-8 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+        <AdminDemoHelpCard />
+        <AdminSystemStatusCard />
       </div>
 
       <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">

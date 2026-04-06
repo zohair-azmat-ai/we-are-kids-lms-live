@@ -16,6 +16,11 @@ export type HealthResponse = {
   status: string;
   service: string;
   version: string;
+  environment?: string;
+  port?: number;
+  livekit_configured?: boolean;
+  billing_configured?: boolean;
+  ai_configured?: boolean;
 };
 
 export type AuthUser = {
@@ -229,6 +234,37 @@ export type AIInsightsResponse = {
   generated_at: string;
   summary: string;
   items: AIInsightItem[];
+};
+
+export type ActivityPoint = {
+  label: string;
+  value: number;
+};
+
+export type AdminAnalyticsResponse = {
+  total_users: number;
+  total_teachers: number;
+  total_students: number;
+  active_classes: number;
+  live_sessions_count: number;
+  recordings_count: number;
+  active_students: number;
+  activity_change_label: string;
+  class_fill_ratio: number;
+  plan_usage_summary: BillingUsageSummary;
+  live_activity_points: ActivityPoint[];
+  recording_activity_points: ActivityPoint[];
+};
+
+export type TeacherAnalyticsResponse = {
+  assigned_classes: number;
+  live_sessions_run: number;
+  recordings_created: number;
+  enrolled_students: number;
+  active_students: number;
+  average_class_size: number;
+  participation_summary: string;
+  live_activity_points: ActivityPoint[];
 };
 
 async function parseResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
@@ -814,5 +850,21 @@ export async function fetchAIInsights(): Promise<AIInsightsResponse> {
     "/api/v1/ai/insights",
     { cache: "no-store" },
     "AI insights request failed.",
+  );
+}
+
+export async function fetchAdminAnalytics(): Promise<AdminAnalyticsResponse> {
+  return requestJson<AdminAnalyticsResponse>(
+    "/api/v1/admin/analytics",
+    { cache: "no-store" },
+    "Admin analytics request failed.",
+  );
+}
+
+export async function fetchTeacherAnalytics(): Promise<TeacherAnalyticsResponse> {
+  return requestJson<TeacherAnalyticsResponse>(
+    "/api/v1/teacher/analytics",
+    { cache: "no-store" },
+    "Teacher analytics request failed.",
   );
 }
