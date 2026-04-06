@@ -50,6 +50,7 @@ export function DashboardShell({
   const dashboardLinksByRole: Record<UserRole, Array<{ href: string; label: string }>> = {
     admin: [
       { href: "/admin/dashboard", label: "Overview" },
+      { href: "/admin/billing", label: "Billing" },
       { href: "/admin/teachers", label: "Teachers" },
       { href: "/admin/students", label: "Students" },
       { href: "/admin/classes", label: "Classes" },

@@ -2,6 +2,14 @@ const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "")
   .trim()
   .replace(/\/$/, "");
 
+const LIVEKIT_URL = (process.env.NEXT_PUBLIC_LIVEKIT_URL ?? "")
+  .trim()
+  .replace(/\/$/, "");
+
+const APP_URL = (process.env.NEXT_PUBLIC_APP_URL ?? "")
+  .trim()
+  .replace(/\/$/, "");
+
 export type HealthResponse = {
   status: string;
   service: string;
@@ -16,6 +24,15 @@ export type LiveClassSession = {
   status: "live" | "scheduled" | "ended";
   participants_count: number;
   started_at?: string | null;
+};
+
+export type LiveKitRole = "teacher" | "student";
+
+export type LiveKitTokenResponse = {
+  token: string;
+  url: string;
+  room_name: string;
+  participant_name: string;
 };
 
 export type RecordingItem = {
@@ -105,6 +122,47 @@ export type SuccessResponse = {
   message: string;
 };
 
+export type BillingPlan = "starter" | "standard" | "premium";
+
+export type BillingPlanFeatures = {
+  teachers_limit: number;
+  students_limit: number;
+  classes_limit: number;
+  monthly_label: string;
+  audience: string;
+  highlights: string[];
+};
+
+export type BillingPlanInfo = {
+  code: BillingPlan;
+  name: string;
+  description: string;
+  is_current: boolean;
+  features: BillingPlanFeatures;
+};
+
+export type BillingSubscription = {
+  school_name: string;
+  billing_email: string;
+  plan: BillingPlan;
+  subscription_status: string;
+  current_period_end: string | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  plans: BillingPlanInfo[];
+  teachers_count: number;
+  students_count: number;
+  classes_count: number;
+};
+
+export type BillingCheckoutResponse = {
+  checkout_url: string;
+};
+
+export type BillingCustomerPortalResponse = {
+  portal_url: string;
+};
+
 async function parseResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
   if (!response.ok) {
     const errorPayload = (await response.json().catch(() => null)) as
@@ -147,22 +205,12 @@ export function getApiBaseUrl(): string {
   return API_BASE_URL;
 }
 
-export function getWebSocketUrl(path: string): string {
-  if (!API_BASE_URL) {
-    throw new Error(
-      "The app is missing its API connection setting. Please set NEXT_PUBLIC_API_BASE_URL.",
-    );
-  }
+export function getAppUrl(): string {
+  return APP_URL;
+}
 
-  const baseUrl = new URL(API_BASE_URL);
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-
-  baseUrl.protocol = baseUrl.protocol === "https:" ? "wss:" : "ws:";
-  baseUrl.pathname = normalizedPath;
-  baseUrl.search = "";
-  baseUrl.hash = "";
-
-  return baseUrl.toString();
+export function getResolvedLiveKitUrl(urlFromBackend?: string): string {
+  return LIVEKIT_URL || (urlFromBackend ?? "").trim();
 }
 
 export function getAssetUrl(path: string): string {
@@ -216,6 +264,71 @@ export async function startLiveClass(
   );
 }
 
+export async function endLiveClass(
+  classId: string,
+  teacherEmail: string,
+): Promise<SuccessResponse> {
+  return requestJson<SuccessResponse>(
+    `/api/v1/classes/${classId}/end`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        teacher_email: teacherEmail,
+      }),
+    },
+    "End class request failed.",
+  );
+}
+
+export async function joinClassPresence(params: {
+  classId: string;
+  role: LiveKitRole;
+  participantEmail: string;
+  participantName: string;
+}): Promise<LiveClassSession> {
+  return requestJson<LiveClassSession>(
+    `/api/v1/classes/${params.classId}/presence/join`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        role: params.role,
+        participant_email: params.participantEmail,
+        participant_name: params.participantName,
+      }),
+    },
+    "Unable to register classroom join.",
+  );
+}
+
+export async function leaveClassPresence(params: {
+  classId: string;
+  role: LiveKitRole;
+  participantEmail: string;
+  participantName: string;
+}): Promise<LiveClassSession> {
+  return requestJson<LiveClassSession>(
+    `/api/v1/classes/${params.classId}/presence/leave`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        role: params.role,
+        participant_email: params.participantEmail,
+        participant_name: params.participantName,
+      }),
+    },
+    "Unable to register classroom leave.",
+  );
+}
+
 export async function fetchClassSession(
   classId: string,
 ): Promise<LiveClassSession> {
@@ -223,6 +336,30 @@ export async function fetchClassSession(
     `/api/v1/classes/${classId}`,
     { cache: "no-store" },
     "Class session request failed.",
+  );
+}
+
+export async function requestLiveKitToken(params: {
+  roomName: string;
+  participantName: string;
+  participantEmail: string;
+  role: LiveKitRole;
+}): Promise<LiveKitTokenResponse> {
+  return requestJson<LiveKitTokenResponse>(
+    "/api/v1/livekit/token",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        room_name: params.roomName,
+        participant_name: params.participantName,
+        participant_email: params.participantEmail,
+        role: params.role,
+      }),
+    },
+    "Unable to prepare your live classroom connection.",
   );
 }
 
@@ -463,5 +600,74 @@ export async function endAdminLiveSession(
       method: "POST",
     },
     "End live session failed.",
+  );
+}
+
+export async function fetchBillingSubscription(
+  adminEmail: string,
+): Promise<BillingSubscription> {
+  const query = new URLSearchParams({ admin_email: adminEmail }).toString();
+  return requestJson<BillingSubscription>(
+    `/api/v1/billing/subscription?${query}`,
+    { cache: "no-store" },
+    "Billing subscription request failed.",
+  );
+}
+
+export async function createBillingCheckoutSession(params: {
+  adminEmail: string;
+  plan: BillingPlan;
+  appUrl?: string;
+}): Promise<BillingCheckoutResponse> {
+  const resolvedAppUrl = (params.appUrl ?? APP_URL).trim();
+
+  if (!resolvedAppUrl) {
+    throw new Error(
+      "The app is missing NEXT_PUBLIC_APP_URL, which is required for Stripe checkout redirects.",
+    );
+  }
+
+  return requestJson<BillingCheckoutResponse>(
+    "/api/v1/billing/checkout-session",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        admin_email: params.adminEmail,
+        plan: params.plan,
+        app_url: resolvedAppUrl,
+      }),
+    },
+    "Unable to create Stripe checkout session.",
+  );
+}
+
+export async function createBillingCustomerPortal(params: {
+  adminEmail: string;
+  appUrl?: string;
+}): Promise<BillingCustomerPortalResponse> {
+  const resolvedAppUrl = (params.appUrl ?? APP_URL).trim();
+
+  if (!resolvedAppUrl) {
+    throw new Error(
+      "The app is missing NEXT_PUBLIC_APP_URL, which is required for Stripe portal redirects.",
+    );
+  }
+
+  return requestJson<BillingCustomerPortalResponse>(
+    "/api/v1/billing/customer-portal",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        admin_email: params.adminEmail,
+        app_url: resolvedAppUrl,
+      }),
+    },
+    "Unable to open Stripe customer portal.",
   );
 }

@@ -1,4 +1,5 @@
 import Image from "next/image";
+import Link from "next/link";
 
 import { BackendStatus } from "@/components/backend-status";
 import { SiteHeader } from "@/components/site-header";
@@ -130,6 +131,12 @@ export default function HomePage() {
                 >
                   Learn More
                 </a>
+                <Link
+                  href="/pricing"
+                  className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-slate-50 px-6 py-3.5 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-white"
+                >
+                  View Pricing
+                </Link>
               </div>
             </div>
 
@@ -451,6 +458,9 @@ export default function HomePage() {
                 </a>
                 <a href="/#classes" className="block">
                   Classes
+                </a>
+                <a href="/pricing" className="block">
+                  Pricing
                 </a>
                 <a href="/#contact" className="block">
                   Contact

@@ -15,6 +15,7 @@ const landingLinks = [
   { label: "Home", href: "/#home" },
   { label: "About", href: "/#about" },
   { label: "Classes", href: "/#classes" },
+  { label: "Pricing", href: "/pricing" },
   { label: "Gallery", href: "/#gallery" },
   { label: "Contact", href: "/#contact" },
 ];
