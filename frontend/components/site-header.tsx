@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { getSession } from "@/lib/demo-auth";
+import { useAuth } from "@/components/auth-provider";
 
 type SiteHeaderProps = {
   showAnchorLinks?: boolean;
@@ -15,25 +15,25 @@ const landingLinks = [
   { label: "Home", href: "/#home" },
   { label: "About", href: "/#about" },
   { label: "Classes", href: "/#classes" },
+  { label: "Pricing", href: "/pricing" },
   { label: "Gallery", href: "/#gallery" },
   { label: "Contact", href: "/#contact" },
 ];
 
 export function SiteHeader({ showAnchorLinks = true }: SiteHeaderProps) {
   const pathname = usePathname();
+  const { user } = useAuth();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [dashboardHref, setDashboardHref] = useState<string | null>(null);
 
   useEffect(() => {
-    const session = getSession();
-
-    if (!session) {
+    if (!user) {
       setDashboardHref(null);
       return;
     }
 
-    setDashboardHref(`/${session.role}/dashboard`);
-  }, [pathname]);
+    setDashboardHref(`/${user.role}/dashboard`);
+  }, [pathname, user]);
 
   const primaryAction = useMemo(() => {
     if (dashboardHref) {

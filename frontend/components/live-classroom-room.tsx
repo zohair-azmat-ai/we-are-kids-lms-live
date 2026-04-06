@@ -2,65 +2,91 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ConnectionState, Participant, Room, RoomEvent, Track } from "livekit-client";
 
+import { useAuth } from "@/components/auth-provider";
 import { LoadingPanel, Spinner } from "@/components/ui-state";
 import { VideoTile } from "@/components/video-tile";
 import { usePageTitle } from "@/hooks/use-page-title";
-import { getSession, type SessionUser, type UserRole } from "@/lib/demo-auth";
+import { type SessionUser, type UserRole } from "@/lib/demo-auth";
 import {
+  endLiveClass,
   fetchClassSession,
-  getWebSocketUrl,
+  getResolvedLiveKitUrl,
+  joinClassPresence,
+  leaveClassPresence,
+  requestLiveKitToken,
   uploadRecording,
   type LiveClassSession,
 } from "@/lib/api";
 
 type ClassroomRole = Extract<UserRole, "teacher" | "student">;
 
-type Participant = {
-  participant_id: string;
-  name: string;
-  email: string;
-  role: ClassroomRole;
-};
-
 type LiveClassroomRoomProps = {
   classId: string;
   role: ClassroomRole;
 };
 
-const rtcConfiguration: RTCConfiguration = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+type ParticipantCard = {
+  identity: string;
+  name: string;
+  stream: MediaStream | null;
+  isLocal: boolean;
+  isTeacher: boolean;
 };
+
+function createStreamFromParticipant(participant: Participant): MediaStream | null {
+  const stream = new MediaStream();
+
+  for (const publication of participant.trackPublications.values()) {
+    const track = publication.track;
+
+    if (track?.mediaStreamTrack) {
+      stream.addTrack(track.mediaStreamTrack);
+    }
+  }
+
+  return stream.getTracks().length ? stream : null;
+}
+
+function hasPublishedTrack(participant: Participant, kind: Track.Kind): boolean {
+  for (const publication of participant.trackPublications.values()) {
+    if (publication.track?.kind === kind) {
+      return !publication.track.isMuted;
+    }
+  }
+
+  return false;
+}
 
 export function LiveClassroomRoom({
   classId,
   role,
 }: LiveClassroomRoomProps) {
   const router = useRouter();
+  const { user, isLoading: isAuthLoading } = useAuth();
   const [session, setSession] = useState<SessionUser | null>(null);
   const [classroom, setClassroom] = useState<LiveClassSession | null>(null);
-  const [participants, setParticipants] = useState<Participant[]>([]);
-  const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>(
-    {},
-  );
+  const [participants, setParticipants] = useState<ParticipantCard[]>([]);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [selfParticipantId, setSelfParticipantId] = useState("");
   const [micEnabled, setMicEnabled] = useState(true);
   const [cameraEnabled, setCameraEnabled] = useState(true);
+  const [connectionState, setConnectionState] = useState("connecting");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
+  const [deviceMessage, setDeviceMessage] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [isUploadingRecording, setIsUploadingRecording] = useState(false);
   const [recordingError, setRecordingError] = useState("");
   const [recordingSuccess, setRecordingSuccess] = useState("");
 
-  const initializedRef = useRef(false);
-  const isMountedRef = useRef(true);
-  const wsRef = useRef<WebSocket | null>(null);
+  const roomRef = useRef<Room | null>(null);
+  const classroomRef = useRef<LiveClassSession | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
-  const peersRef = useRef<Map<string, RTCPeerConnection>>(new Map());
-  const pendingIceRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
+  const intervalRef = useRef<number | null>(null);
+  const hasRegisteredPresenceRef = useRef(false);
+  const isMountedRef = useRef(true);
   const manualDisconnectRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
@@ -74,33 +100,74 @@ export function LiveClassroomRoom({
     classroom ? `${titlePrefix} - ${classroom.title}` : `${titlePrefix} Loading`,
   );
 
-  const remoteParticipantStreams = useMemo(() => {
-    return participants
-      .filter(
-        (participant) =>
-          participant.participant_id !== selfParticipantId &&
-          Boolean(remoteStreams[participant.participant_id]),
-      )
-      .map((participant) => ({
-        participant,
-        stream: remoteStreams[participant.participant_id],
-      }));
-  }, [participants, remoteStreams, selfParticipantId]);
+  const localParticipantCard = useMemo<ParticipantCard | null>(() => {
+    if (!session) {
+      return null;
+    }
 
-  const teacherStreamCard =
-    role === "student"
-      ? remoteParticipantStreams.find((item) => item.participant.role === "teacher")
-      : null;
+    return {
+      identity: session.email,
+      name: session.name,
+      stream: localStream,
+      isLocal: true,
+      isTeacher: role === "teacher",
+    };
+  }, [localStream, role, session]);
+
+  const remoteParticipants = useMemo(() => {
+    return participants.filter((participant) => !participant.isLocal);
+  }, [participants]);
+
+  const participantCount = useMemo(() => {
+    const localCount = localParticipantCard ? 1 : 0;
+    return Math.max(classroom?.participants_count ?? 0, localCount + remoteParticipants.length);
+  }, [classroom?.participants_count, localParticipantCard, remoteParticipants.length]);
+
+  const teacherStreamCard = useMemo(() => {
+    return remoteParticipants.find(
+      (participant) => participant.identity === classroom?.teacher_email,
+    );
+  }, [classroom?.teacher_email, remoteParticipants]);
+
+  const studentTiles = useMemo(() => {
+    return remoteParticipants.filter(
+      (participant) => participant.identity !== classroom?.teacher_email,
+    );
+  }, [classroom?.teacher_email, remoteParticipants]);
+
+  function syncRoomState(room: Room, currentClassroom: LiveClassSession | null) {
+    const nextLocalStream = createStreamFromParticipant(room.localParticipant);
+    localStreamRef.current = nextLocalStream;
+    setLocalStream(nextLocalStream);
+    setMicEnabled(hasPublishedTrack(room.localParticipant, Track.Kind.Audio));
+    setCameraEnabled(hasPublishedTrack(room.localParticipant, Track.Kind.Video));
+
+    const nextParticipants = Array.from(room.remoteParticipants.values()).map(
+      (participant: Participant) => ({
+        identity: participant.identity,
+        name: participant.name || participant.identity,
+        stream: createStreamFromParticipant(participant),
+        isLocal: false,
+        isTeacher: participant.identity === currentClassroom?.teacher_email,
+      }),
+    );
+
+    setParticipants(nextParticipants);
+  }
 
   async function refreshClassroomSession() {
     try {
-      const latestClassroom = await fetchClassSession(classId);
+      const nextClassroom = await fetchClassSession(classId);
 
-      if (isMountedRef.current) {
-        setClassroom(latestClassroom);
+      if (!isMountedRef.current) {
+        return nextClassroom;
       }
+
+      setClassroom(nextClassroom);
+      classroomRef.current = nextClassroom;
+      return nextClassroom;
     } catch {
-      return;
+      return null;
     }
   }
 
@@ -233,188 +300,83 @@ export function LiveClassroomRoom({
     });
   }
 
-  function cleanupPeerConnection(participantId: string) {
-    const peerConnection = peersRef.current.get(participantId);
-
-    if (peerConnection) {
-      peerConnection.onicecandidate = null;
-      peerConnection.ontrack = null;
-      peerConnection.onconnectionstatechange = null;
-      peerConnection.close();
-      peersRef.current.delete(participantId);
-    }
-
-    pendingIceRef.current.delete(participantId);
-    setRemoteStreams((currentStreams) => {
-      const nextStreams = { ...currentStreams };
-      delete nextStreams[participantId];
-      return nextStreams;
-    });
-  }
-
-  function cleanupMediaAndConnections() {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current = null;
-    }
-
-    for (const participantId of peersRef.current.keys()) {
-      cleanupPeerConnection(participantId);
-    }
-
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-
-    if (localStreamRef.current) {
-      for (const track of localStreamRef.current.getTracks()) {
-        track.stop();
-      }
-    }
-
-    localStreamRef.current = null;
-    setLocalStream(null);
-  }
-
-  function sendSignal(payload: Record<string, unknown>) {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+  async function publishRoomEndedNotice() {
+    if (!roomRef.current) {
       return;
     }
 
-    wsRef.current.send(JSON.stringify(payload));
+    try {
+      const payload = new TextEncoder().encode(
+        JSON.stringify({
+          type: "room-ended",
+          message: "The teacher ended this class session.",
+        }),
+      );
+      await roomRef.current.localParticipant.publishData(payload, { reliable: true });
+    } catch {
+      return;
+    }
   }
 
-  async function flushPendingIce(participantId: string) {
-    const peerConnection = peersRef.current.get(participantId);
-    const pendingCandidates = pendingIceRef.current.get(participantId);
+  function scheduleRedirectBack() {
+    window.setTimeout(() => {
+      router.replace(dashboardPath);
+    }, 1600);
+  }
 
-    if (!peerConnection || !pendingCandidates?.length || !peerConnection.remoteDescription) {
+  function handleRemoteRoomEnded(message: string) {
+    if (manualDisconnectRef.current) {
       return;
     }
 
-    for (const candidate of pendingCandidates) {
-      await peerConnection.addIceCandidate(candidate);
+    manualDisconnectRef.current = true;
+    setStatusMessage(message);
+
+    if (roomRef.current) {
+      roomRef.current.disconnect();
+      roomRef.current = null;
     }
 
-    pendingIceRef.current.delete(participantId);
+    scheduleRedirectBack();
   }
 
-  function ensurePeerConnection(participant: Participant) {
-    const existingConnection = peersRef.current.get(participant.participant_id);
-
-    if (existingConnection) {
-      return existingConnection;
+  async function registerPresence() {
+    if (!session || hasRegisteredPresenceRef.current) {
+      return;
     }
 
-    const peerConnection = new RTCPeerConnection(rtcConfiguration);
-
-    if (localStreamRef.current) {
-      for (const track of localStreamRef.current.getTracks()) {
-        peerConnection.addTrack(track, localStreamRef.current);
-      }
-    }
-
-    peerConnection.onicecandidate = (event) => {
-      if (!event.candidate) {
-        return;
-      }
-
-      sendSignal({
-        type: "ice-candidate",
-        target_id: participant.participant_id,
-        data: event.candidate.toJSON(),
+    try {
+      const updatedClassroom = await joinClassPresence({
+        classId,
+        role,
+        participantEmail: session.email,
+        participantName: session.name,
       });
-    };
-
-    peerConnection.ontrack = (event) => {
-      const remoteStream = event.streams[0] ?? new MediaStream([event.track]);
-      setRemoteStreams((currentStreams) => ({
-        ...currentStreams,
-        [participant.participant_id]: remoteStream,
-      }));
-    };
-
-    peerConnection.onconnectionstatechange = () => {
-      if (
-        peerConnection.connectionState === "failed" ||
-        peerConnection.connectionState === "closed" ||
-        peerConnection.connectionState === "disconnected"
-      ) {
-        cleanupPeerConnection(participant.participant_id);
-      }
-    };
-
-    peersRef.current.set(participant.participant_id, peerConnection);
-    return peerConnection;
+      hasRegisteredPresenceRef.current = true;
+      setClassroom(updatedClassroom);
+      classroomRef.current = updatedClassroom;
+    } catch {
+      return;
+    }
   }
 
-  async function createOfferForParticipant(participant: Participant) {
-    if (role !== "teacher") {
+  async function unregisterPresence() {
+    if (!session || !hasRegisteredPresenceRef.current) {
       return;
     }
 
-    const peerConnection = ensurePeerConnection(participant);
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-
-    sendSignal({
-      type: "offer",
-      target_id: participant.participant_id,
-      data: offer,
-    });
-  }
-
-  async function handleOffer(sender: Participant, offer: RTCSessionDescriptionInit) {
-    const peerConnection = ensurePeerConnection(sender);
-    await peerConnection.setRemoteDescription(offer);
-    await flushPendingIce(sender.participant_id);
-
-    const answer = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(answer);
-
-    sendSignal({
-      type: "answer",
-      target_id: sender.participant_id,
-      data: answer,
-    });
-  }
-
-  async function handleAnswer(
-    senderId: string,
-    answer: RTCSessionDescriptionInit,
-  ) {
-    const peerConnection = peersRef.current.get(senderId);
-
-    if (!peerConnection) {
+    try {
+      await leaveClassPresence({
+        classId,
+        role,
+        participantEmail: session.email,
+        participantName: session.name,
+      });
+    } catch {
       return;
+    } finally {
+      hasRegisteredPresenceRef.current = false;
     }
-
-    await peerConnection.setRemoteDescription(answer);
-    await flushPendingIce(senderId);
-  }
-
-  async function handleIceCandidate(
-    senderId: string,
-    candidate: RTCIceCandidateInit,
-  ) {
-    const peerConnection = peersRef.current.get(senderId);
-
-    if (!peerConnection) {
-      const pendingCandidates = pendingIceRef.current.get(senderId) ?? [];
-      pendingCandidates.push(candidate);
-      pendingIceRef.current.set(senderId, pendingCandidates);
-      return;
-    }
-
-    if (peerConnection.remoteDescription) {
-      await peerConnection.addIceCandidate(candidate);
-      return;
-    }
-
-    const pendingCandidates = pendingIceRef.current.get(senderId) ?? [];
-    pendingCandidates.push(candidate);
-    pendingIceRef.current.set(senderId, pendingCandidates);
   }
 
   useEffect(() => {
@@ -426,21 +388,17 @@ export function LiveClassroomRoom({
   }, []);
 
   useEffect(() => {
-    if (initializedRef.current) {
-      return;
-    }
-
-    initializedRef.current = true;
-
     async function initializeRoom() {
-      const storedSession = getSession();
+      if (isAuthLoading) {
+        return;
+      }
 
-      if (!storedSession || storedSession.role !== role) {
+      if (!user || user.role !== role) {
         router.replace("/login");
         return;
       }
 
-      setSession(storedSession);
+      setSession(user);
 
       try {
         const classroomSession = await fetchClassSession(classId);
@@ -452,143 +410,122 @@ export function LiveClassroomRoom({
         }
 
         setClassroom(classroomSession);
+        classroomRef.current = classroomSession;
 
-        const mediaStream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true,
+        const tokenResponse = await requestLiveKitToken({
+          roomName: classId,
+          participantName: user.name,
+          participantEmail: user.email,
+          role,
         });
 
-        if (!isMountedRef.current) {
-          for (const track of mediaStream.getTracks()) {
-            track.stop();
-          }
-          return;
+        const liveKitUrl = getResolvedLiveKitUrl(tokenResponse.url);
+
+        if (!liveKitUrl) {
+          throw new Error(
+            "The live classroom server URL is missing. Please set LiveKit environment variables.",
+          );
         }
 
-        localStreamRef.current = mediaStream;
-        setLocalStream(mediaStream);
+        const room = new Room({
+          adaptiveStream: true,
+          dynacast: true,
+        });
+        roomRef.current = room;
 
-        const websocket = new WebSocket(
-          getWebSocketUrl(`/ws/classroom/${classId}`),
-        );
+        room
+          .on(RoomEvent.ConnectionStateChanged, (nextState: ConnectionState) => {
+            setConnectionState(nextState);
+          })
+          .on(RoomEvent.Connected, async () => {
+            setConnectionState("connected");
+            await registerPresence();
+            syncRoomState(room, classroomSession);
+            setIsLoading(false);
+          })
+          .on(RoomEvent.Reconnecting, () => {
+            setConnectionState("reconnecting");
+            setStatusMessage("Connection is unstable. Trying to reconnect to the classroom.");
+          })
+          .on(RoomEvent.Reconnected, () => {
+            setConnectionState("connected");
+            setStatusMessage("Classroom connection restored.");
+            void registerPresence();
+            syncRoomState(room, classroomRef.current);
+          })
+          .on(RoomEvent.ParticipantConnected, () => {
+            syncRoomState(room, classroomRef.current);
+          })
+          .on(RoomEvent.ParticipantDisconnected, () => {
+            syncRoomState(room, classroomRef.current);
+          })
+          .on(RoomEvent.TrackSubscribed, () => {
+            syncRoomState(room, classroomRef.current);
+          })
+          .on(RoomEvent.TrackUnsubscribed, () => {
+            syncRoomState(room, classroomRef.current);
+          })
+          .on(RoomEvent.LocalTrackPublished, () => {
+            syncRoomState(room, classroomRef.current);
+          })
+          .on(RoomEvent.LocalTrackUnpublished, () => {
+            syncRoomState(room, classroomRef.current);
+          })
+          .on(RoomEvent.TrackMuted, () => {
+            syncRoomState(room, classroomRef.current);
+          })
+          .on(RoomEvent.TrackUnmuted, () => {
+            syncRoomState(room, classroomRef.current);
+          })
+          .on(RoomEvent.DataReceived, (payload: Uint8Array) => {
+            try {
+              const parsed = JSON.parse(new TextDecoder().decode(payload)) as {
+                type?: string;
+                message?: string;
+              };
 
-        websocket.onopen = () => {
-          websocket.send(
-            JSON.stringify({
-              type: "join",
-              role,
-              name: storedSession.name,
-              email: storedSession.email,
-            }),
-          );
-          setIsLoading(false);
-        };
-
-        websocket.onmessage = async (event) => {
-          const message = JSON.parse(event.data) as {
-            type: string;
-            participant_id?: string;
-            participants?: Participant[];
-            participant?: Participant;
-            sender_id?: string;
-            sender?: Participant;
-            data?: RTCSessionDescriptionInit | RTCIceCandidateInit;
-            message?: string;
-          };
-
-          if (message.type === "error") {
-            setError(message.message ?? "Connection error.");
-            return;
-          }
-
-          if (message.type === "joined") {
-            const nextParticipants = message.participants ?? [];
-            setSelfParticipantId(message.participant_id ?? "");
-            setParticipants(nextParticipants);
-            await refreshClassroomSession();
-
-            if (role === "teacher") {
-              for (const participant of nextParticipants) {
-                if (participant.role === "student") {
-                  await createOfferForParticipant(participant);
-                }
+              if (parsed.type === "room-ended") {
+                handleRemoteRoomEnded(
+                  parsed.message ?? "The teacher ended this class session.",
+                );
               }
+            } catch {
+              return;
             }
-            return;
-          }
-
-          if (message.type === "participant-joined" && message.participant) {
-            setParticipants((currentParticipants) => {
-              if (!message.participant) {
-                return currentParticipants;
-              }
-
-              const filteredParticipants = currentParticipants.filter(
-                (participant) =>
-                  participant.participant_id !== message.participant?.participant_id,
-              );
-              return [...filteredParticipants, message.participant];
-            });
-            await refreshClassroomSession();
-
-            if (role === "teacher" && message.participant.role === "student") {
-              await createOfferForParticipant(message.participant);
+          })
+          .on(RoomEvent.Disconnected, () => {
+            if (!manualDisconnectRef.current) {
+              setStatusMessage("Connection lost. Please return to the dashboard.");
             }
-            return;
-          }
+          });
 
-          if (message.type === "participant-left" && message.participant_id) {
-            cleanupPeerConnection(message.participant_id);
-            setParticipants((currentParticipants) =>
-              currentParticipants.filter(
-                (participant) => participant.participant_id !== message.participant_id,
-              ),
-            );
-            await refreshClassroomSession();
-            return;
-          }
+        await room.connect(liveKitUrl, tokenResponse.token);
 
-          if (message.type === "offer" && message.sender && message.data) {
-            await handleOffer(
-              message.sender,
-              message.data as RTCSessionDescriptionInit,
-            );
-            return;
+        try {
+          await room.localParticipant.setCameraEnabled(true);
+          await room.localParticipant.setMicrophoneEnabled(true);
+        } catch (deviceError) {
+          if (
+            deviceError instanceof DOMException &&
+            deviceError.name === "NotAllowedError"
+          ) {
+            setDeviceMessage("Camera or microphone permission was denied.");
+          } else {
+            setDeviceMessage("Unable to start your camera or microphone.");
           }
+        }
 
-          if (message.type === "answer" && message.sender_id && message.data) {
-            await handleAnswer(
-              message.sender_id,
-              message.data as RTCSessionDescriptionInit,
-            );
-            return;
-          }
+        syncRoomState(room, classroomSession);
 
-          if (message.type === "ice-candidate" && message.sender_id && message.data) {
-            await handleIceCandidate(
-              message.sender_id,
-              message.data as RTCIceCandidateInit,
-            );
-            return;
-          }
+        intervalRef.current = window.setInterval(() => {
+          void (async () => {
+            const latestClassroom = await refreshClassroomSession();
 
-          if (message.type === "room-ended") {
-            setStatusMessage(message.message ?? "The class session has ended.");
-            manualDisconnectRef.current = true;
-            cleanupMediaAndConnections();
-            window.setTimeout(() => {
-              router.replace(dashboardPath);
-            }, 1600);
-          }
-        };
-
-        websocket.onclose = () => {
-          if (!manualDisconnectRef.current && isMountedRef.current) {
-            setStatusMessage("Connection lost. Please return to the dashboard.");
-          }
-        };
-
-        wsRef.current = websocket;
+            if (latestClassroom?.status === "ended") {
+              handleRemoteRoomEnded("This class session has ended.");
+            }
+          })();
+        }, 12000);
       } catch (requestError) {
         if (
           requestError instanceof DOMException &&
@@ -607,52 +544,100 @@ export function LiveClassroomRoom({
     void initializeRoom();
 
     return () => {
+      const shouldAutoCleanup = !manualDisconnectRef.current;
       manualDisconnectRef.current = true;
-      cleanupMediaAndConnections();
+
+      if (intervalRef.current) {
+        window.clearInterval(intervalRef.current);
+      }
+
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+
+      void (async () => {
+        if (!shouldAutoCleanup) {
+          return;
+        }
+
+        await unregisterPresence();
+      })();
+
+      if (roomRef.current) {
+        roomRef.current.disconnect();
+        roomRef.current = null;
+      }
     };
-  }, [classId, dashboardPath, role, router]);
+  }, [classId, role, router, user, isAuthLoading]);
 
   async function handleLeaveOrEndClass() {
+    if (!session) {
+      return;
+    }
+
     manualDisconnectRef.current = true;
 
     if (role === "teacher" && isRecording) {
       await stopRecording();
     }
 
-    if (role === "teacher") {
-      sendSignal({ type: "end-class" });
+    if (intervalRef.current) {
+      window.clearInterval(intervalRef.current);
     }
 
-    cleanupMediaAndConnections();
+    try {
+      if (role === "teacher") {
+        await publishRoomEndedNotice();
+        await endLiveClass(classId, session.email);
+      } else {
+        await unregisterPresence();
+      }
+    } catch (requestError) {
+      setStatusMessage(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to update classroom status.",
+      );
+    }
+
+    if (roomRef.current) {
+      roomRef.current.disconnect();
+      roomRef.current = null;
+    }
+
     router.push(dashboardPath);
   }
 
-  function toggleMic() {
-    if (!localStreamRef.current) {
+  async function toggleMic() {
+    if (!roomRef.current) {
       return;
     }
 
     const nextEnabled = !micEnabled;
 
-    for (const track of localStreamRef.current.getAudioTracks()) {
-      track.enabled = nextEnabled;
+    try {
+      await roomRef.current.localParticipant.setMicrophoneEnabled(nextEnabled);
+      setMicEnabled(nextEnabled);
+      syncRoomState(roomRef.current, classroomRef.current);
+    } catch {
+      setDeviceMessage("Unable to update microphone access.");
     }
-
-    setMicEnabled(nextEnabled);
   }
 
-  function toggleCamera() {
-    if (!localStreamRef.current) {
+  async function toggleCamera() {
+    if (!roomRef.current) {
       return;
     }
 
     const nextEnabled = !cameraEnabled;
 
-    for (const track of localStreamRef.current.getVideoTracks()) {
-      track.enabled = nextEnabled;
+    try {
+      await roomRef.current.localParticipant.setCameraEnabled(nextEnabled);
+      setCameraEnabled(nextEnabled);
+      syncRoomState(roomRef.current, classroomRef.current);
+    } catch {
+      setDeviceMessage("Unable to update camera access.");
     }
-
-    setCameraEnabled(nextEnabled);
   }
 
   if (isLoading) {
@@ -661,7 +646,7 @@ export function LiveClassroomRoom({
         <div className="mx-auto max-w-7xl px-6 py-10 sm:px-8 lg:px-10">
           <LoadingPanel
             title="Joining classroom"
-            message="We are preparing your camera, microphone, and live class session."
+            message="We are preparing your LiveKit room, camera, microphone, and class session."
           />
         </div>
       </main>
@@ -700,6 +685,9 @@ export function LiveClassroomRoom({
               <div className="inline-flex rounded-full bg-red-50 px-4 py-2 text-sm font-semibold text-red-600">
                 {classroom.status === "live" ? "Live" : classroom.status}
               </div>
+              <div className="inline-flex rounded-full bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700">
+                {connectionState}
+              </div>
               {role === "teacher" && isRecording ? (
                 <div className="inline-flex rounded-full bg-amber-100 px-4 py-2 text-sm font-semibold text-amber-800">
                   Recording Active
@@ -711,7 +699,7 @@ export function LiveClassroomRoom({
                 </div>
               ) : null}
               <div className="inline-flex rounded-full bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700">
-                {classroom.participants_count} participants
+                {participantCount} participants
               </div>
             </div>
           </div>
@@ -720,6 +708,12 @@ export function LiveClassroomRoom({
         {statusMessage ? (
           <div className="mt-6 rounded-[1.5rem] border border-amber-100 bg-amber-50 px-5 py-4 text-sm text-amber-700">
             {statusMessage}
+          </div>
+        ) : null}
+
+        {deviceMessage ? (
+          <div className="mt-6 rounded-[1.5rem] border border-red-100 bg-red-50 px-5 py-4 text-sm text-red-600">
+            {deviceMessage}
           </div>
         ) : null}
 
@@ -733,7 +727,7 @@ export function LiveClassroomRoom({
                     : `Live session with ${classroom.teacher_name}`}
                 </p>
                 <p className="mt-1 text-lg font-semibold text-slate-800">
-                  {role === "teacher" ? "Host controls active" : "Connected classroom"}
+                  {role === "teacher" ? "LiveKit classroom active" : "Connected classroom"}
                 </p>
               </div>
               <div className="rounded-full bg-emerald-100 px-4 py-2 text-sm font-semibold text-emerald-700">
@@ -745,13 +739,13 @@ export function LiveClassroomRoom({
               <VideoTile
                 stream={
                   role === "teacher"
-                    ? remoteParticipantStreams[0]?.stream ?? null
+                    ? studentTiles[0]?.stream ?? null
                     : teacherStreamCard?.stream ?? null
                 }
                 title={
                   role === "teacher"
-                    ? remoteParticipantStreams[0]?.participant.name ?? "Waiting for students"
-                    : teacherStreamCard?.participant.name ?? classroom.teacher_name
+                    ? studentTiles[0]?.name ?? "Waiting for students"
+                    : teacherStreamCard?.name ?? classroom.teacher_name
                 }
                 subtitle={
                   role === "teacher" ? "Student video" : "Teacher live stream"
@@ -764,7 +758,7 @@ export function LiveClassroomRoom({
             <div className="mt-6 grid gap-3 sm:flex sm:flex-wrap">
               <button
                 type="button"
-                onClick={toggleMic}
+                onClick={() => void toggleMic()}
                 className={`inline-flex w-full items-center justify-center rounded-full px-4 py-3 text-sm font-semibold sm:w-auto ${
                   micEnabled
                     ? "border border-slate-200 bg-white text-slate-700"
@@ -775,8 +769,8 @@ export function LiveClassroomRoom({
               </button>
               <button
                 type="button"
-                onClick={toggleCamera}
-                className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                onClick={() => void toggleCamera()}
+                className={`inline-flex w-full items-center justify-center rounded-full px-4 py-3 text-sm font-semibold sm:w-auto ${
                   cameraEnabled
                     ? "border border-slate-200 bg-white text-slate-700"
                     : "bg-amber-100 text-amber-800"
@@ -795,18 +789,8 @@ export function LiveClassroomRoom({
                       : "border border-slate-200 bg-white text-slate-700"
                   }`}
                 >
-                  {isUploadingRecording ? (
-                    <Spinner className="h-4 w-4" />
-                  ) : null}
+                  {isUploadingRecording ? <Spinner className="h-4 w-4" /> : null}
                   {isRecording ? "Stop Recording" : "Record"}
-                </button>
-              ) : null}
-              {role === "student" ? (
-                <button
-                  type="button"
-                  className="inline-flex w-full items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 sm:w-auto"
-                >
-                  Raise Hand
                 </button>
               ) : null}
               <button
@@ -829,17 +813,6 @@ export function LiveClassroomRoom({
                 {recordingSuccess}
               </div>
             ) : null}
-
-            {role === "teacher" ? (
-              <div className="mt-6 rounded-[2rem] border border-slate-100 bg-slate-50 p-5">
-                <p className="text-sm font-semibold uppercase tracking-[0.24em] text-amber-600">
-                  Recordings
-                </p>
-                <p className="mt-3 text-sm leading-7 text-slate-600">
-                  Recording tools will connect here after the live video MVP is stable.
-                </p>
-              </div>
-            ) : null}
           </section>
 
           <div className="grid gap-6">
@@ -850,15 +823,25 @@ export function LiveClassroomRoom({
 
               {role === "teacher" ? (
                 <div className="mt-5 space-y-3">
-                  {participants.map((participant) => (
-                    <div
-                      key={participant.participant_id}
-                      className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-slate-700"
-                    >
-                      {participant.name}
-                      {participant.participant_id === selfParticipantId ? " (You)" : ""}
+                  {localParticipantCard ? (
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-slate-700">
+                      {localParticipantCard.name} (You)
                     </div>
-                  ))}
+                  ) : null}
+                  {studentTiles.length ? (
+                    studentTiles.map((participant) => (
+                      <div
+                        key={participant.identity}
+                        className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-slate-700"
+                      >
+                        {participant.name}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-slate-700">
+                      Students will appear here after they join the room.
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="mt-5">
@@ -873,42 +856,50 @@ export function LiveClassroomRoom({
               )}
             </section>
 
-            {role === "teacher" ? (
-              <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
-                <p className="text-sm font-semibold uppercase tracking-[0.24em] text-sky-600">
-                  Student Tiles
-                </p>
-                <div className="mt-5 grid gap-4">
+            <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-sky-600">
+                {role === "teacher" ? "Student Tiles" : "Classroom Tiles"}
+              </p>
+              <div className="mt-5 grid gap-4">
+                {localParticipantCard ? (
                   <VideoTile
-                    stream={localStream}
-                    title={session.name}
+                    stream={localParticipantCard.stream}
+                    title={localParticipantCard.name}
                     subtitle="Your camera"
                     muted
                     className="min-h-[160px] sm:min-h-[180px]"
                   />
-                  {remoteParticipantStreams.map(({ participant, stream }) => (
-                    <VideoTile
-                      key={participant.participant_id}
-                      stream={stream}
-                      title={participant.name}
-                      subtitle="Student"
-                      className="min-h-[160px] sm:min-h-[180px]"
-                    />
-                  ))}
-                </div>
-              </section>
-            ) : null}
+                ) : null}
+                {(role === "teacher" ? studentTiles : remoteParticipants).map((participant) => (
+                  <VideoTile
+                    key={participant.identity}
+                    stream={participant.stream}
+                    title={participant.name}
+                    subtitle={participant.isTeacher ? "Teacher" : "Student"}
+                    className="min-h-[160px] sm:min-h-[180px]"
+                  />
+                ))}
+                {!remoteParticipants.length ? (
+                  <div className="rounded-[1.5rem] border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
+                    Participant video tiles will appear here when others join the room.
+                  </div>
+                ) : null}
+              </div>
+            </section>
 
             <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-red-500">
-                Chat
+                Classroom Notes
               </p>
               <div className="mt-5 space-y-3">
                 <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
-                  Teacher: Welcome to class
+                  LiveKit is handling the room connection for a more stable classroom session.
                 </div>
                 <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
-                  {session.name}: Camera and mic are ready
+                  Recordings still save through the existing LMS upload workflow.
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
+                  Room name: {classId}
                 </div>
               </div>
             </section>

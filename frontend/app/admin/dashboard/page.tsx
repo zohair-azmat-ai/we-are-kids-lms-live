@@ -74,6 +74,12 @@ export default function AdminDashboardPage() {
 
   const quickLinks = [
     {
+      title: "Billing",
+      text: "View plan status, renewal details, and manage your subscription.",
+      href: "/admin/billing",
+      accent: "text-violet-600",
+    },
+    {
       title: "Teachers",
       text: "Add, update, and remove teacher accounts.",
       href: "/admin/teachers",
