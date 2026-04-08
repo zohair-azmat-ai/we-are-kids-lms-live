@@ -24,11 +24,13 @@ from app.config import (
     UPLOAD_DIR,
 )
 from app.db import SessionLocal
-from app.models import BillingAccount, Classroom, Enrollment, LiveSession, Recording, User
+from app.models import Attendance, BillingAccount, Classroom, Enrollment, LiveSession, Recording, User
 from app.schemas import (
     AIChatRequest,
     AIChatResponse,
     AIInsightsResponse,
+    AttendanceRecord,
+    AttendanceSummary,
     AuthLoginRequest,
     AuthLoginResponse,
     AuthRegisterRequest,
@@ -75,22 +77,27 @@ from app.services import (
     build_teacher_summary,
     build_teacher_analytics,
     cleanup_expired_recordings,
+    close_attendance_record,
     delete_recording_file,
     get_active_session_for_class,
     get_billing_account_by_customer_id,
     get_billing_account_by_subscription_id,
     get_class,
+    get_class_attendance,
     get_live_or_scheduled_class,
     get_or_create_billing_account,
     get_or_create_live_session,
+    get_session_attendance,
     get_student,
     get_teacher,
+    get_teacher_attendance,
     get_teacher_by_email,
     get_user_by_email_and_role,
     get_user_by_name_and_role,
     is_student_enrolled_in_class,
     mark_class_as_ended,
     normalize_email,
+    record_attendance_join,
     require_admin_user,
     require_plan_capacity,
     serialize_recording,
@@ -483,7 +490,7 @@ def join_class_presence(
         raise HTTPException(status_code=403, detail="Classroom role mismatch.")
 
     with SessionLocal() as db:
-        validate_classroom_access(
+        classroom, user, session = validate_classroom_access(
             db,
             class_id=class_id,
             role=payload.role,
@@ -492,12 +499,20 @@ def join_class_presence(
             allow_teacher_start=payload.role == "teacher",
         )
 
-    session = update_live_session_presence(class_id, 1)
+        if payload.role == "student":
+            record_attendance_join(
+                db,
+                session_id=session.id,
+                class_id=class_id,
+                student_id=user.id,
+            )
 
-    if not session:
+    live_class = update_live_session_presence(class_id, 1)
+
+    if not live_class:
         raise HTTPException(status_code=404, detail="Class session not found.")
 
-    return session
+    return live_class
 
 
 @api_router.post("/classes/{class_id}/presence/leave", response_model=LiveClass)
@@ -510,21 +525,33 @@ def leave_class_presence(
         raise HTTPException(status_code=403, detail="Classroom role mismatch.")
 
     with SessionLocal() as db:
-        validate_classroom_access(
-            db,
-            class_id=class_id,
-            role=payload.role,
-            participant_email=current_user.email,
-            participant_name=current_user.name,
-            allow_teacher_start=False,
-        )
+        # Record attendance leave first — the session may have already ended
+        # (teacher ended it before student clicked leave), so handle gracefully.
+        if payload.role == "student":
+            student = get_user_by_email_and_role(db, current_user.email, "student")
 
-    session = update_live_session_presence(class_id, -1)
+            if student:
+                close_attendance_record(db, class_id=class_id, student_id=student.id)
 
-    if not session:
+        try:
+            validate_classroom_access(
+                db,
+                class_id=class_id,
+                role=payload.role,
+                participant_email=current_user.email,
+                participant_name=current_user.name,
+                allow_teacher_start=False,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+
+    live_class = update_live_session_presence(class_id, -1)
+
+    if not live_class:
         raise HTTPException(status_code=404, detail="Class session not found.")
 
-    return session
+    return live_class
 
 
 @api_router.get("/classes/{class_id}", response_model=LiveClass)
@@ -1291,3 +1318,48 @@ def get_teacher_analytics(
             raise HTTPException(status_code=404, detail="Teacher not found.")
 
         return build_teacher_analytics(db, teacher)
+
+
+@api_router.get("/teacher/attendance", response_model=list[AttendanceSummary])
+def get_teacher_attendance_route(
+    current_user: User = Depends(get_current_user),
+) -> list[AttendanceSummary]:
+    if current_user.role != "teacher":
+        raise HTTPException(status_code=403, detail="Teacher access is required.")
+
+    with SessionLocal() as db:
+        teacher = get_teacher_by_email(db, current_user.email)
+
+        if not teacher:
+            raise HTTPException(status_code=404, detail="Teacher not found.")
+
+        return get_teacher_attendance(db, teacher)
+
+
+@api_router.get("/attendance/session/{session_id}", response_model=AttendanceSummary)
+def get_session_attendance_route(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+) -> AttendanceSummary:
+    if current_user.role not in {"teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="Teacher or admin access required.")
+
+    with SessionLocal() as db:
+        summary = get_session_attendance(db, session_id)
+
+        if not summary:
+            raise HTTPException(status_code=404, detail="Session not found.")
+
+        return summary
+
+
+@api_router.get("/attendance/class/{class_id}", response_model=list[AttendanceSummary])
+def get_class_attendance_route(
+    class_id: str,
+    current_user: User = Depends(get_current_user),
+) -> list[AttendanceSummary]:
+    if current_user.role not in {"teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="Teacher or admin access required.")
+
+    with SessionLocal() as db:
+        return get_class_attendance(db, class_id)

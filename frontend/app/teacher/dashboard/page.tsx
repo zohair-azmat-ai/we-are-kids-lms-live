@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
 import { AIInsightsPanel } from "@/components/ai-insights-panel";
 import { AnalyticsBarChart } from "@/components/analytics-bar-chart";
+import { AttendancePanel } from "@/components/attendance-panel";
 import { DashboardShell } from "@/components/dashboard-shell";
 import {
   fetchRecordings,
@@ -180,6 +181,10 @@ export default function TeacherDashboardPage() {
           </div>
         </section>
       ) : null}
+
+      <div className="mt-8">
+        <AttendancePanel mode="teacher" title="Session Attendance" />
+      </div>
 
       <div className="mt-8">
         <AIInsightsPanel title="Teaching Insights" />

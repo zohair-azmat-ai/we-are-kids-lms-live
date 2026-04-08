@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"c:\\\\Users\\\\Zohair\\\\Desktop\\\\Zohair\\\\school-lms-live\")",
+      "Bash(python -m compileall app/)",
+      "Bash(npx tsc:*)"
+    ]
+  }
+}

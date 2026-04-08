@@ -267,6 +267,30 @@ export type TeacherAnalyticsResponse = {
   live_activity_points: ActivityPoint[];
 };
 
+export type AttendanceRecord = {
+  id: number;
+  session_id: string;
+  class_id: string;
+  class_title: string;
+  student_id: string;
+  student_name: string;
+  student_email: string;
+  joined_at: string;
+  left_at: string | null;
+  status: "present" | "left" | "completed";
+  duration_minutes: number | null;
+};
+
+export type AttendanceSummary = {
+  session_id: string;
+  class_id: string;
+  class_title: string;
+  started_at: string | null;
+  total_attended: number;
+  currently_present: number;
+  records: AttendanceRecord[];
+};
+
 async function parseResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
   if (!response.ok) {
     if (response.status === 401) {
@@ -866,5 +890,33 @@ export async function fetchTeacherAnalytics(): Promise<TeacherAnalyticsResponse>
     "/api/v1/teacher/analytics",
     { cache: "no-store" },
     "Teacher analytics request failed.",
+  );
+}
+
+export async function fetchTeacherAttendance(): Promise<AttendanceSummary[]> {
+  return requestJson<AttendanceSummary[]>(
+    "/api/v1/teacher/attendance",
+    { cache: "no-store" },
+    "Attendance data request failed.",
+  );
+}
+
+export async function fetchSessionAttendance(
+  sessionId: string,
+): Promise<AttendanceSummary> {
+  return requestJson<AttendanceSummary>(
+    `/api/v1/attendance/session/${sessionId}`,
+    { cache: "no-store" },
+    "Session attendance request failed.",
+  );
+}
+
+export async function fetchClassAttendance(
+  classId: string,
+): Promise<AttendanceSummary[]> {
+  return requestJson<AttendanceSummary[]>(
+    `/api/v1/attendance/class/${classId}`,
+    { cache: "no-store" },
+    "Class attendance request failed.",
   );
 }

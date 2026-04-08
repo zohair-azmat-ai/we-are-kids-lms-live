@@ -5,7 +5,9 @@ import { useEffect, useState } from "react";
 import {
   endAdminLiveSession,
   fetchAdminLiveSessions,
+  fetchClassAttendance,
   type AdminLiveSession,
+  type AttendanceSummary,
 } from "@/lib/api";
 
 export function AdminLiveSessionsManagement() {
@@ -15,6 +17,7 @@ export function AdminLiveSessionsManagement() {
   const [successMessage, setSuccessMessage] = useState("");
   const [busyId, setBusyId] = useState("");
   const [expandedId, setExpandedId] = useState("");
+  const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceSummary[]>>({});
 
   async function loadSessions() {
     try {
@@ -118,11 +121,19 @@ export function AdminLiveSessionsManagement() {
                   </div>
                   <button
                     type="button"
-                    onClick={() =>
-                      setExpandedId((currentId) =>
-                        currentId === session.class_id ? "" : session.class_id,
-                      )
-                    }
+                    onClick={async () => {
+                      const next = expandedId === session.class_id ? "" : session.class_id;
+                      setExpandedId(next);
+
+                      if (next && !attendanceMap[next]) {
+                        try {
+                          const data = await fetchClassAttendance(next);
+                          setAttendanceMap((prev) => ({ ...prev, [next]: data }));
+                        } catch {
+                          // silently ignore; attendance panel shows its own error
+                        }
+                      }
+                    }}
                     className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
                   >
                     View Details
@@ -139,10 +150,60 @@ export function AdminLiveSessionsManagement() {
               </div>
 
               {expandedId === session.class_id ? (
-                <div className="mt-4 rounded-2xl border border-slate-100 bg-white px-4 py-4 text-sm text-slate-600">
-                  This live room is active for <strong>{session.title}</strong> with{" "}
-                  <strong>{session.participants_count}</strong> participants. Admins can
-                  monitor the start time and end the session here if needed.
+                <div className="mt-4 space-y-3 rounded-2xl border border-slate-100 bg-white px-4 py-4 text-sm text-slate-600">
+                  <p>
+                    This live room is active for <strong>{session.title}</strong> with{" "}
+                    <strong>{session.participants_count}</strong> participants.
+                  </p>
+
+                  {/* Attendance for this session */}
+                  {attendanceMap[session.class_id] ? (
+                    attendanceMap[session.class_id].length === 0 ? (
+                      <p className="text-slate-500">No attendance records yet for this class.</p>
+                    ) : (
+                      <div className="mt-2">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-teal-600">
+                          Attendance
+                        </p>
+                        {attendanceMap[session.class_id].map((summary) => (
+                          <div
+                            key={summary.session_id}
+                            className="mb-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-3"
+                          >
+                            <div className="flex items-center justify-between">
+                              <p className="text-xs font-semibold text-slate-700">
+                                {summary.started_at
+                                  ? new Date(summary.started_at).toLocaleString()
+                                  : "Session"}
+                              </p>
+                              <div className="flex gap-2">
+                                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                                  {summary.currently_present} present
+                                </span>
+                                <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-600">
+                                  {summary.total_attended} total
+                                </span>
+                              </div>
+                            </div>
+                            {summary.records.length > 0 ? (
+                              <ul className="mt-2 space-y-1">
+                                {summary.records.map((rec) => (
+                                  <li key={rec.id} className="flex items-center justify-between text-xs text-slate-600">
+                                    <span className="font-medium text-slate-800">{rec.student_name}</span>
+                                    <span className={`rounded-full px-2 py-0.5 font-semibold ${rec.status === "present" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+                                      {rec.status}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  ) : (
+                    <p className="text-xs text-slate-400">Loading attendance...</p>
+                  )}
                 </div>
               ) : null}
             </div>

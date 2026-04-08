@@ -78,6 +78,11 @@ class User(Base):
         back_populates="teacher",
         cascade="all, delete-orphan",
     )
+    attendance_records: Mapped[list["Attendance"]] = relationship(
+        back_populates="student",
+        cascade="all, delete-orphan",
+        foreign_keys="Attendance.student_id",
+    )
 
 
 class Classroom(Base):
@@ -103,6 +108,10 @@ class Classroom(Base):
         cascade="all, delete-orphan",
     )
     recordings: Mapped[list["Recording"]] = relationship(
+        back_populates="classroom",
+        cascade="all, delete-orphan",
+    )
+    attendance_records: Mapped[list["Attendance"]] = relationship(
         back_populates="classroom",
         cascade="all, delete-orphan",
     )
@@ -132,6 +141,10 @@ class LiveSession(Base):
 
     classroom: Mapped[Classroom] = relationship(back_populates="live_sessions")
     teacher: Mapped[User] = relationship(back_populates="live_sessions")
+    attendance_records: Mapped[list["Attendance"]] = relationship(
+        back_populates="session",
+        cascade="all, delete-orphan",
+    )
 
 
 class Recording(Base):
@@ -152,3 +165,23 @@ class Recording(Base):
 
     classroom: Mapped[Classroom] = relationship(back_populates="recordings")
     teacher: Mapped[User] = relationship(back_populates="recordings")
+
+
+class Attendance(Base):
+    __tablename__ = "attendance"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("live_sessions.id"), nullable=False, index=True)
+    class_id: Mapped[str] = mapped_column(ForeignKey("classes.id"), nullable=False, index=True)
+    student_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="present")
+    duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    session: Mapped[LiveSession] = relationship(back_populates="attendance_records")
+    classroom: Mapped[Classroom] = relationship(back_populates="attendance_records")
+    student: Mapped[User] = relationship(
+        back_populates="attendance_records",
+        foreign_keys=[student_id],
+    )
