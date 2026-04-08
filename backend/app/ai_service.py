@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import OPENAI_API_KEY, OPENAI_MODEL
-from app.models import Classroom, Enrollment, LiveSession, Recording, User
+from app.models import Attendance, Classroom, Enrollment, LiveSession, Recording, User
 from app.schemas import AIInsightItem, AIInsightsResponse, AIChatResponse, SessionSummaryResponse
 from app.services import (
     build_billing_usage_summary,
@@ -22,6 +22,8 @@ from app.services import (
 
 
 FULL_CLASS_THRESHOLD = 8
+ALERT_PRIORITY = {"critical": 3, "warning": 2, "info": 1}
+MAX_ALERT_ITEMS = 3
 
 
 def _serialize_usage_metric(metric: Any) -> dict[str, Any]:
@@ -111,12 +113,25 @@ def build_ai_snapshot(db: Session, current_user: User) -> dict[str, Any]:
 
     recent_session_cutoff = now - timedelta(days=7)
     recent_recording_cutoff = now - timedelta(days=7)
+    recent_attendance_cutoff = now - timedelta(days=7)
     recent_live_sessions = [
         session for session in live_sessions if session.started_at and session.started_at >= recent_session_cutoff
     ]
     recent_recordings = [
         recording for recording in recordings if recording.created_at >= recent_recording_cutoff
     ]
+    attendance_query = select(Attendance).where(Attendance.joined_at >= recent_attendance_cutoff)
+    if classes:
+        attendance_query = attendance_query.where(Attendance.class_id.in_([classroom.id for classroom in classes]))
+    else:
+        attendance_query = attendance_query.where(Attendance.class_id == "__none__")
+    recent_attendance = db.scalars(attendance_query).all()
+    sessions_with_attendance = {record.session_id for record in recent_attendance}
+    avg_attendance_per_session = (
+        round(len(recent_attendance) / len(sessions_with_attendance), 1)
+        if sessions_with_attendance
+        else 0.0
+    )
     expiring_recordings = [
         recording for recording in recordings if recording.expires_at <= now + timedelta(days=2)
     ]
@@ -154,107 +169,233 @@ def build_ai_snapshot(db: Session, current_user: User) -> dict[str, Any]:
         "recent_activity": {
             "recent_live_sessions": len(recent_live_sessions),
             "recent_recordings": len(recent_recordings),
+            "attendance_events_last_7_days": len(recent_attendance),
+            "sessions_with_attendance_last_7_days": len(sessions_with_attendance),
+            "avg_attendance_per_session": avg_attendance_per_session,
         },
         "full_class_threshold": FULL_CLASS_THRESHOLD,
     }
 
 
+def _build_default_ai_insights(scope: str) -> AIInsightsResponse:
+    dashboard_href = "/admin/dashboard" if scope == "admin" else "/teacher/dashboard"
+    recordings_href = "/admin/recordings" if scope == "admin" else "/teacher/recordings"
+    return AIInsightsResponse(
+        generated_at=utc_now(),
+        summary="Operations snapshot is available with baseline recommendations.",
+        items=[
+            AIInsightItem(
+                id="capacity-default",
+                alert_type="capacity",
+                title="Capacity baseline",
+                message="Monitor teacher, student, and class limits to prevent enrollment bottlenecks.",
+                severity="warning",
+                cta_label="Open Billing" if scope == "admin" else "Open Dashboard",
+                cta_href="/admin/billing" if scope == "admin" else dashboard_href,
+            ),
+            AIInsightItem(
+                id="engagement-default",
+                alert_type="engagement",
+                title="Engagement baseline",
+                message="Track attendance and session activity each week to catch low participation early.",
+                severity="info",
+                cta_label="Open Dashboard",
+                cta_href=dashboard_href,
+            ),
+            AIInsightItem(
+                id="status-default",
+                alert_type="status",
+                title="Recording continuity",
+                message="Keep recent recordings updated so families and staff can review class progress.",
+                severity="info",
+                cta_label="Manage Recordings",
+                cta_href=recordings_href,
+            ),
+        ],
+    )
+
+
+def _merge_messages(*parts: str) -> str:
+    unique_parts: list[str] = []
+    for part in parts:
+        cleaned = part.strip()
+        if cleaned and cleaned not in unique_parts:
+            unique_parts.append(cleaned)
+    return " ".join(unique_parts)
+
+
+def _choose_severity(current: str, candidate: str) -> str:
+    return candidate if ALERT_PRIORITY[candidate] > ALERT_PRIORITY[current] else current
+
+
 def build_ai_insights_from_snapshot(snapshot: dict[str, Any]) -> AIInsightsResponse:
-    items: list[AIInsightItem] = []
+    items_by_type: dict[str, AIInsightItem] = {}
     usage = snapshot["usage"]
     counts = snapshot["counts"]
     classes = snapshot["classes"]
     scope = snapshot["scope"]
+    recent_activity = snapshot["recent_activity"]
 
-    for index, warning in enumerate(usage["warnings"][:3]):
-        items.append(
-            AIInsightItem(
-                id=f"usage-warning-{index}",
-                title="Capacity signal",
-                message=warning,
-                severity="warning",
-                cta_label="Open Billing",
-                cta_href="/admin/billing" if scope == "admin" else None,
+    def upsert_alert(
+        *,
+        alert_type: str,
+        title: str,
+        message: str,
+        severity: str,
+        cta_label: str | None = None,
+        cta_href: str | None = None,
+    ) -> None:
+        existing = items_by_type.get(alert_type)
+        if not existing:
+            items_by_type[alert_type] = AIInsightItem(
+                id=f"{alert_type}-alert",
+                alert_type=alert_type,  # type: ignore[arg-type]
+                title=title,
+                message=message,
+                severity=severity,  # type: ignore[arg-type]
+                cta_label=cta_label,
+                cta_href=cta_href,
             )
-        )
+            return
 
-    if usage["teachers"]["is_at_limit"] or usage["students"]["is_at_limit"] or usage["classes"]["is_at_limit"]:
-        items.append(
-            AIInsightItem(
-                id="upgrade-recommended",
-                title="Upgrade recommended",
-                message="Your current plan is blocking growth in at least one area. Upgrading will unlock more teachers, students, or classes.",
-                severity="critical",
-                cta_label="View Plans",
-                cta_href="/pricing" if scope == "admin" else None,
-            )
-        )
+        merged_message = _merge_messages(existing.message, message)
+        merged_severity = _choose_severity(existing.severity, severity)
+        use_candidate_title = ALERT_PRIORITY[severity] > ALERT_PRIORITY[existing.severity]
+        merged_title = title if use_candidate_title else existing.title
+        merged_cta_label = cta_label or existing.cta_label
+        merged_cta_href = cta_href or existing.cta_href
 
-    if snapshot["recent_activity"]["recent_live_sessions"] == 0:
-        items.append(
-            AIInsightItem(
-                id="low-live-activity",
-                title="Class engagement looks low",
-                message="No live sessions have been started in the last 7 days. Consider scheduling a new lesson or checking teacher activity.",
-                severity="warning",
-                cta_label="Review Live Sessions",
-                cta_href="/admin/live-sessions" if scope == "admin" else "/teacher/dashboard",
-            )
-        )
-
-    if snapshot["recent_activity"]["recent_recordings"] == 0:
-        items.append(
-            AIInsightItem(
-                id="recording-activity",
-                title="Recordings need attention",
-                message="No new recordings were created in the last 7 days. Recording a recent lesson can improve replay access for families and staff.",
-                severity="info",
-                cta_label="Manage Recordings",
-                cta_href="/admin/recordings" if scope == "admin" else "/teacher/recordings",
-            )
+        items_by_type[alert_type] = AIInsightItem(
+            id=existing.id,
+            alert_type=existing.alert_type,
+            title=merged_title,
+            message=merged_message,
+            severity=merged_severity,  # type: ignore[arg-type]
+            cta_label=merged_cta_label,
+            cta_href=merged_cta_href,
         )
 
     full_classes = [classroom for classroom in classes if classroom["is_full"]]
+    at_limit_resources = [
+        resource_name
+        for resource_name in ("teachers", "students", "classes")
+        if usage[resource_name]["is_at_limit"]
+    ]
+    near_limit_resources = [
+        resource_name
+        for resource_name in ("teachers", "students", "classes")
+        if usage[resource_name]["is_near_limit"] and resource_name not in at_limit_resources
+    ]
 
-    if full_classes:
-        items.append(
-            AIInsightItem(
-                id="full-classes",
-                title="Some classes are full",
-                message=(
-                    f"{len(full_classes)} class(es) have {snapshot['full_class_threshold']} or more enrolled students. "
-                    "Adding another class may help distribute workload."
-                ),
-                severity="info",
-                cta_label="Manage Classes",
-                cta_href="/admin/classes" if scope == "admin" else None,
-            )
+    capacity_parts: list[str] = []
+    if at_limit_resources:
+        capacity_parts.append(
+            f"Plan capacity is reached for {', '.join(at_limit_resources)}."
         )
+    if near_limit_resources:
+        capacity_parts.append(
+            f"Usage is near the limit for {', '.join(near_limit_resources)}."
+        )
+    if full_classes:
+        capacity_parts.append(
+            f"{len(full_classes)} class(es) are already at or above {snapshot['full_class_threshold']} learners."
+        )
+
+    if capacity_parts:
+        capacity_severity = "critical" if at_limit_resources else "warning"
+        upsert_alert(
+            alert_type="capacity",
+            title="Capacity needs attention",
+            message=" ".join(capacity_parts),
+            severity=capacity_severity,
+            cta_label="Open Billing" if scope == "admin" else None,
+            cta_href="/admin/billing" if scope == "admin" else None,
+        )
+
+    should_upgrade = bool(at_limit_resources or near_limit_resources or usage["warnings"])
+    if should_upgrade:
+        upgrade_message = (
+            "Upgrade is recommended to unlock more teacher, student, and class capacity."
+            if at_limit_resources
+            else "Plan usage trend suggests upgrading soon to avoid enrollment or staffing blocks."
+        )
+        upsert_alert(
+            alert_type="upgrade",
+            title="Upgrade recommendation",
+            message=upgrade_message,
+            severity="critical" if at_limit_resources else "warning",
+            cta_label="View Plans",
+            cta_href="/pricing",
+        )
+
+    engagement_signals: list[str] = []
+    engagement_severity = "info"
+    if recent_activity["recent_live_sessions"] == 0:
+        engagement_signals.append("No live sessions were started in the last 7 days.")
+        engagement_severity = "warning"
+    else:
+        engagement_signals.append(
+            f"{recent_activity['recent_live_sessions']} live session(s) ran in the last 7 days."
+        )
+
+    if recent_activity["attendance_events_last_7_days"] == 0:
+        engagement_signals.append("Attendance activity is missing in the past 7 days.")
+        engagement_severity = "warning"
+    else:
+        engagement_signals.append(
+            f"Average attendance was {recent_activity['avg_attendance_per_session']} learner event(s) per active session."
+        )
+
+    if counts["teachers_total"] > 0:
+        active_ratio = round((counts["teachers_active"] / counts["teachers_total"]) * 100)
+        if active_ratio < 50:
+            engagement_signals.append(
+                f"Only {active_ratio}% of teachers are active right now, so teaching activity may drop."
+            )
+            engagement_severity = "critical" if active_ratio == 0 else "warning"
+        else:
+            engagement_signals.append(f"Teacher activity is stable at {active_ratio}% active.")
+
+    if recent_activity["recent_recordings"] == 0:
+        engagement_signals.append("No new recordings were created in the last 7 days.")
+
+    upsert_alert(
+        alert_type="engagement",
+        title="Engagement pulse",
+        message=" ".join(engagement_signals),
+        severity=engagement_severity,
+        cta_label="Review Live Sessions" if scope == "admin" else "Open Dashboard",
+        cta_href="/admin/live-sessions" if scope == "admin" else "/teacher/dashboard",
+    )
 
     if counts["recordings_expiring_soon"] > 0:
-        items.append(
-            AIInsightItem(
-                id="recordings-expiring",
-                title="Recordings expiring soon",
-                message=f"{counts['recordings_expiring_soon']} recording(s) will expire within 2 days. Review or replace important lessons soon.",
-                severity="info",
-                cta_label="Open Recordings",
-                cta_href="/admin/recordings" if scope == "admin" else "/teacher/recordings",
-            )
+        upsert_alert(
+            alert_type="engagement",
+            title="Engagement pulse",
+            message=(
+                f"{counts['recordings_expiring_soon']} recording(s) expire within 2 days; "
+                "refresh key lessons to keep replay access available."
+            ),
+            severity="info",
+            cta_label="Manage Recordings",
+            cta_href="/admin/recordings" if scope == "admin" else "/teacher/recordings",
         )
 
-    if not items:
-        items.append(
-            AIInsightItem(
-                id="all-clear",
-                title="Healthy operations",
-                message="Your current setup looks stable. Usage is under control and recent activity signals are healthy.",
-                severity="info",
-            )
-        )
+    if not items_by_type:
+        return _build_default_ai_insights(scope)
 
-    summary = items[0].message if items else "No insights available."
-    return AIInsightsResponse(generated_at=utc_now(), summary=summary, items=items[:5])
+    sorted_items = sorted(
+        items_by_type.values(),
+        key=lambda item: ALERT_PRIORITY[item.severity],
+        reverse=True,
+    )
+    top_items = sorted_items[:MAX_ALERT_ITEMS]
+    summary = top_items[0].message if top_items else "Operational insights are available."
+    return AIInsightsResponse(generated_at=utc_now(), summary=summary, items=top_items)
+
+
+def get_default_ai_insights(scope: str) -> AIInsightsResponse:
+    return _build_default_ai_insights(scope)
 
 
 def _build_system_prompt(snapshot: dict[str, Any], insights: AIInsightsResponse) -> str:

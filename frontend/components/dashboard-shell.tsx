@@ -8,7 +8,6 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { type UserRole } from "@/lib/demo-auth";
 import { usePageTitle } from "@/hooks/use-page-title";
-import { LoadingPanel } from "@/components/ui-state";
 import { AIAssistantChat } from "@/components/ai-assistant-chat";
 
 type DashboardShellProps = {
@@ -76,18 +75,23 @@ export function DashboardShell({
   if (isLoading || !user || user.role !== allowedRole) {
     return (
       <main className="min-h-screen">
-        <div className="mx-auto max-w-7xl px-6 py-10 sm:px-8 lg:px-10">
-          <LoadingPanel
-            title="Loading dashboard"
-            message="Checking your session and preparing the right workspace."
-          />
+        <div className="mx-auto max-w-7xl px-6 py-6 sm:px-8 lg:px-10">
+          <div className="animate-pulse space-y-6">
+            <section className="h-24 rounded-[2rem] border border-slate-100 bg-white shadow-soft" />
+            <section className="h-52 rounded-[2.5rem] border border-slate-100 bg-white shadow-soft" />
+            <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="h-36 rounded-[2rem] border border-slate-100 bg-white shadow-soft" />
+              <div className="h-36 rounded-[2rem] border border-slate-100 bg-white shadow-soft" />
+              <div className="h-36 rounded-[2rem] border border-slate-100 bg-white shadow-soft sm:col-span-2 lg:col-span-1" />
+            </section>
+          </div>
         </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen">
+    <main className="min-h-screen pb-[max(100px,calc(env(safe-area-inset-bottom)+100px))]">
       <div className="mx-auto max-w-7xl px-6 py-6 sm:px-8 lg:px-10">
         <header className="rounded-[2rem] border border-slate-100 bg-white px-5 py-4 shadow-soft sm:px-6">
           <div className="flex items-center justify-between gap-4">

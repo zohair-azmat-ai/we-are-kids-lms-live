@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { fetchAIInsights, type AIInsightsResponse } from "@/lib/api";
 
@@ -19,6 +19,7 @@ const severityLabels = {
 
 type AIInsightsPanelProps = {
   title?: string;
+  lazy?: boolean;
 };
 
 function InsightsSkeleton() {
@@ -35,6 +36,7 @@ function InsightsSkeleton() {
 
 export function AIInsightsPanel({
   title = "AI Insights",
+  lazy = true,
 }: AIInsightsPanelProps) {
   const [insights, setInsights] = useState<AIInsightsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -58,8 +60,46 @@ export function AIInsightsPanel({
   }, []);
 
   useEffect(() => {
-    void loadInsights();
-  }, [loadInsights]);
+    if (!lazy) {
+      void loadInsights();
+      return;
+    }
+
+    let isCancelled = false;
+    const runLoad = () => {
+      if (!isCancelled) {
+        void loadInsights();
+      }
+    };
+
+    if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+      const idleId = window.requestIdleCallback(runLoad, { timeout: 1200 });
+      return () => {
+        isCancelled = true;
+        window.cancelIdleCallback(idleId);
+      };
+    }
+
+    const timerId = globalThis.setTimeout(runLoad, 700);
+    return () => {
+      isCancelled = true;
+      globalThis.clearTimeout(timerId);
+    };
+  }, [lazy, loadInsights]);
+
+  const visibleItems = useMemo(() => {
+    if (!insights) {
+      return [];
+    }
+    const deduped = new Map<string, AIInsightsResponse["items"][number]>();
+    for (const item of insights.items) {
+      const typeKey = item.alert_type ?? item.id.split("-")[0];
+      if (!deduped.has(typeKey)) {
+        deduped.set(typeKey, item);
+      }
+    }
+    return Array.from(deduped.values()).slice(0, 3);
+  }, [insights]);
 
   return (
     <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
@@ -68,7 +108,7 @@ export function AIInsightsPanel({
           <p className="text-sm font-semibold uppercase tracking-[0.24em] text-violet-600">
             {title}
           </p>
-          <h2 className="mt-2 text-2xl font-semibold text-slate-800">
+          <h2 className="mt-2 text-xl font-semibold text-slate-800 sm:text-2xl">
             Smart alerts and recommendations
           </h2>
         </div>
@@ -82,8 +122,8 @@ export function AIInsightsPanel({
       {isLoading ? (
         <InsightsSkeleton />
       ) : error ? (
-        <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 px-4 py-4">
-          <p className="text-sm text-red-600">{error}</p>
+        <div className="mt-6 rounded-2xl border border-red-100 bg-red-50 px-4 py-4">
+          <p className="text-sm text-red-600">{error || "Insights are temporarily delayed."}</p>
           <button
             type="button"
             onClick={() => void loadInsights()}
@@ -94,13 +134,13 @@ export function AIInsightsPanel({
         </div>
       ) : insights ? (
         <>
-          <div className="mt-5 rounded-[1.75rem] border border-slate-100 bg-slate-50 p-4">
+          <div className="mt-6 rounded-[1.75rem] border border-slate-100 bg-slate-50 p-4">
             <p className="text-sm font-medium text-slate-700">{insights.summary}</p>
           </div>
-          <div className="mt-5 grid gap-4 lg:grid-cols-2">
-            {insights.items.map((item) => (
+          <div className="mt-6 grid gap-5 lg:grid-cols-2">
+            {visibleItems.map((item) => (
               <article
-                key={item.id}
+                key={item.alert_type}
                 className={`rounded-[1.75rem] border p-4 ${severityStyles[item.severity]}`}
               >
                 <div className="flex items-center justify-between gap-3">

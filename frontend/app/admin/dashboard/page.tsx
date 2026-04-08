@@ -10,10 +10,7 @@ import { AdminSystemStatusCard } from "@/components/admin-system-status-card";
 import { AnalyticsBarChart } from "@/components/analytics-bar-chart";
 import {
   fetchAdminAnalytics,
-  fetchAdminClasses,
   fetchAdminLiveSessions,
-  fetchAdminStudents,
-  fetchAdminTeachers,
   fetchBillingUsage,
   fetchRecordings,
   type AdminLiveSession,
@@ -43,17 +40,14 @@ export default function AdminDashboardPage() {
     async function loadOverview() {
       try {
         setIsLoadingOverview(true);
-        const [teachers, students, classes, liveSessionsResponse, usageResponse, analyticsResponse] = await Promise.all([
-          fetchAdminTeachers(),
-          fetchAdminStudents(),
-          fetchAdminClasses(),
+        const [liveSessionsResponse, usageResponse, analyticsResponse] = await Promise.all([
           fetchAdminLiveSessions(),
           user ? fetchBillingUsage(user.email) : Promise.resolve(null),
           fetchAdminAnalytics(),
         ]);
-        setTeacherCount(teachers.length);
-        setStudentCount(students.length);
-        setClassCount(classes.length);
+        setTeacherCount(analyticsResponse.total_teachers);
+        setStudentCount(analyticsResponse.total_students);
+        setClassCount(analyticsResponse.active_classes);
         setLiveSessions(liveSessionsResponse);
         setUsage(usageResponse);
         setAnalytics(analyticsResponse);

@@ -25,18 +25,16 @@ export default function TeacherDashboardPage() {
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
   const [analytics, setAnalytics] = useState<TeacherAnalyticsResponse | null>(null);
   const [recordingsError, setRecordingsError] = useState("");
+  const [analyticsError, setAnalyticsError] = useState("");
   const [isLoadingRecordings, setIsLoadingRecordings] = useState(true);
+  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(true);
 
   useEffect(() => {
     async function loadRecordings() {
       try {
         setIsLoadingRecordings(true);
-        const [savedRecordings, analyticsResponse] = await Promise.all([
-          fetchRecordings(),
-          fetchTeacherAnalytics(),
-        ]);
+        const savedRecordings = await fetchRecordings();
         setRecordings(savedRecordings);
-        setAnalytics(analyticsResponse);
       } catch (requestError) {
         setRecordingsError(
           requestError instanceof Error
@@ -48,7 +46,24 @@ export default function TeacherDashboardPage() {
       }
     }
 
+    async function loadAnalytics() {
+      try {
+        setIsLoadingAnalytics(true);
+        const analyticsResponse = await fetchTeacherAnalytics();
+        setAnalytics(analyticsResponse);
+      } catch (requestError) {
+        setAnalyticsError(
+          requestError instanceof Error
+            ? requestError.message
+            : "Unable to load analytics.",
+        );
+      } finally {
+        setIsLoadingAnalytics(false);
+      }
+    }
+
     void loadRecordings();
+    void loadAnalytics();
   }, []);
 
   async function handleStartLiveClass() {
@@ -123,7 +138,23 @@ export default function TeacherDashboardPage() {
         </section>
       </div>
 
-      {analytics ? (
+      {isLoadingAnalytics ? (
+        <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+          <div className="animate-pulse space-y-4">
+            <div className="h-6 w-52 rounded-xl bg-slate-100" />
+            <div className="h-4 w-72 rounded-xl bg-slate-100" />
+            <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-5">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="h-24 rounded-[1.75rem] bg-slate-100" />
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : analyticsError ? (
+        <section className="mt-8 rounded-[2rem] border border-red-100 bg-red-50 p-6 shadow-soft">
+          <p className="text-sm text-red-600">{analyticsError}</p>
+        </section>
+      ) : analytics ? (
         <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>

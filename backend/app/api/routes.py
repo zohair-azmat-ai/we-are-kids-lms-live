@@ -12,7 +12,7 @@ from livekit.api import AccessToken, VideoGrants
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.ai_service import answer_ai_chat, get_ai_insights
+from app.ai_service import answer_ai_chat, get_ai_insights, get_default_ai_insights
 from app.auth import authenticate_user, create_access_token, get_current_user, hash_password
 from app.config import (
     LIVEKIT_API_KEY,
@@ -839,7 +839,7 @@ def get_ai_insights_route(
             return get_ai_insights(db, current_user)
     except Exception as exc:
         logger.error("AI insights generation failed for %s: %s", current_user.email, exc, exc_info=True)
-        raise HTTPException(status_code=500, detail="AI insights are temporarily unavailable. Please try again.") from exc
+        return get_default_ai_insights(current_user.role)
 
 
 @api_router.post("/recordings/upload", response_model=RecordingItem)

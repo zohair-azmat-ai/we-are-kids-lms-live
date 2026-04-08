@@ -258,6 +258,7 @@ class AIChatResponse(BaseModel):
 
 class AIInsightItem(BaseModel):
     id: str
+    alert_type: Literal["capacity", "upgrade", "engagement", "status"]
     title: str
     message: str
     severity: Literal["info", "warning", "critical"]

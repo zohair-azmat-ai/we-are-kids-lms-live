@@ -75,7 +75,10 @@ export function AIAssistantChat() {
   }
 
   return (
-    <div className="pointer-events-none fixed bottom-6 right-6 z-40">
+    <div
+      className="pointer-events-none fixed right-4 z-40 sm:right-6"
+      style={{ bottom: "max(1.5rem, calc(env(safe-area-inset-bottom) + 1rem))" }}
+    >
       {isOpen ? (
         <section className="pointer-events-auto w-[min(24rem,calc(100vw-2rem))] rounded-[2rem] border border-slate-100 bg-white p-4 shadow-2xl shadow-slate-200">
           <div className="flex items-center justify-between gap-3">
@@ -96,7 +99,7 @@ export function AIAssistantChat() {
             </button>
           </div>
 
-          <div className="mt-4 max-h-80 space-y-3 overflow-y-auto rounded-[1.5rem] bg-slate-50 p-3">
+          <div className="mt-4 max-h-[min(20rem,52vh)] space-y-3 overflow-y-auto rounded-[1.5rem] bg-slate-50 p-3">
             {messages.map((message) => (
               <div
                 key={message.id}
@@ -195,6 +198,7 @@ export function AIAssistantChat() {
         type="button"
         onClick={() => setIsOpen((current) => !current)}
         className="pointer-events-auto mt-4 inline-flex items-center justify-center rounded-full bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-2xl shadow-blue-200"
+        style={{ marginBottom: "max(0px, env(safe-area-inset-bottom))" }}
       >
         {isOpen ? "Hide AI" : "Ask AI"}
       </button>
