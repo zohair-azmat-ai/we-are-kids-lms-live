@@ -27,11 +27,11 @@
 
 <br />
 
-> **From demo to real AI-powered SaaS platform.**
+### 🌐 [Explore the live AI LMS platform →](https://we-are-kids-lms-live.vercel.app/)
+
+*Built by [Zohair Azmat](https://github.com/zohair-azmat-ai) — Full Stack Developer · AI Systems Builder*
 
 </div>
-
-<br />
 
 ---
 
@@ -44,7 +44,7 @@
 | 🎥 | **Live WebRTC classrooms** — multi-participant video via LiveKit, not an iframe |
 | 💳 | **SaaS billing** — Stripe subscriptions with plan limits enforced at the API layer |
 | 🤖 | **AI assistant + insights** — OpenAI-powered chat and classroom recommendations |
-| 🔐 | **JWT auth** — bcrypt passwords, role-protected routes, token refresh |
+| 🔐 | **JWT auth** — bcrypt passwords, role-protected routes, token-based sessions |
 | 🐘 | **Cloud database** — Neon Postgres via SQLAlchemy, persistent across deploys |
 | 🚀 | **Production deployed** — Vercel frontend + Hugging Face Spaces backend (Docker) |
 
@@ -73,51 +73,33 @@
 
 ## ⚡ Features
 
-<br />
-
 ### 🤖 AI
-
 - Context-aware **AI assistant chat** for students and teachers
-- **AI insights panel** — recommendations from class activity
-- Graceful fallback if no OpenAI key is set
-
-<br />
+- **AI insights panel** — recommendations generated from class activity
+- Graceful fallback if no OpenAI key is configured
 
 ### 🎥 Live Classes
-
 - Teacher-initiated LiveKit video rooms
 - Secure student join via session token
 - Multi-participant real-time video grid
 - Post-session recording with 5-day auto-expiry
 
-<br />
-
 ### 🏫 LMS Core
-
 - Role dashboards: **Admin · Teacher · Student**
 - Class scheduling and management
 - Recording library: upload · playback · rename · delete
 
-<br />
-
 ### 💳 SaaS Billing
-
 - Stripe subscription billing
 - Tiered plans with **API-layer usage enforcement**
 - Admin billing dashboard + pricing page
 
-<br />
-
 ### 📊 Analytics
-
-- Bar chart dashboards per role
+- Bar chart dashboards per user role
 - Session and recording usage tracking
 - System status monitoring
 
-<br />
-
 ### 🛡️ Admin
-
 - Full user management (teachers + students)
 - Live session monitoring
 - Billing tier control
@@ -126,16 +108,12 @@
 
 ## 📸 Product Screens
 
-<br />
-
 ### 🏠 Landing Page
-
 ![Landing Page](./frontend/public/images/hero.png)
 
 <br />
 
 ### 🎥 Live Classroom
-
 ![Live Classroom](./frontend/public/images/live-class.png)
 
 <br />
@@ -206,22 +184,19 @@ flowchart LR
 
 ---
 
-## 🧪 Demo
+## 📊 Project Metrics
 
-### Try It Now
-
-| Role | Email | Password |
-|:---|:---|:---|
-| Admin | `admin@wearekids.com` | `123456` |
-| Teacher | `teacher1@wearekids.com` | `123456` |
-| Student | `student1@wearekids.com` | `123456` |
-
-### Walkthrough
-
-1. **Admin** → explore user management, billing, and session oversight
-2. **Teacher** → start a live class, check AI insights, manage recordings
-3. **Student** *(open second tab)* → join the live class, use AI assistant
-4. **Billing** → watch plan enforcement trigger at usage limits
+| Metric | Detail |
+|:---|:---|
+| User Roles | Admin · Teacher · Student |
+| Live Video | LiveKit WebRTC — multi-participant |
+| Authentication | JWT + bcrypt |
+| Database | Neon Postgres · SQLAlchemy 2.0 |
+| Billing | Stripe — tiered plan enforcement |
+| AI | OpenAI assistant + insights panel |
+| Analytics | Bar chart dashboards per role |
+| Deployment | Vercel + Hugging Face Spaces |
+| Recordings | Upload · Playback · 5-day auto-expiry |
 
 ---
 
@@ -256,6 +231,10 @@ cp .env.example .env.local
 npm install && npm run dev
 ```
 
+---
+
+## 🔑 Environment Variables
+
 **Frontend** `.env.local`
 ```env
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
@@ -279,7 +258,7 @@ CORS_ORIGINS=http://localhost:3000
 
 **Frontend → Vercel**
 1. Import repo → set root to `frontend/`
-2. Set `NEXT_PUBLIC_API_BASE_URL` → deploy
+2. Set `NEXT_PUBLIC_API_BASE_URL` to backend URL → deploy
 
 **Backend → Hugging Face Spaces**
 1. New Space (Docker) → upload `hf-space-backend/`
@@ -296,28 +275,33 @@ CORS_ORIGINS=http://localhost:3000
 | 🔴 High | Cloud recording storage (S3 / R2) |
 | 🟡 Medium | Parent portal with progress reports |
 | 🟡 Medium | Real-time notifications |
-| 🟡 Medium | AI auto-summaries for sessions |
+| 🟡 Medium | AI auto-summaries for completed sessions |
 | 🟢 Low | Mobile app (React Native) |
 | 🟢 Low | Multi-tenant school isolation |
 
 ---
 
-<br />
-
 <div align="center">
 
 ## 🚀 Ready to Explore?
 
-👉 **Clone the repo** and run locally with the setup above
+### 🌐 [we-are-kids-lms-live.vercel.app](https://we-are-kids-lms-live.vercel.app/)
 
-👉 **Built by [Zohair Azmat](https://github.com/zohair-azmat-ai)** — Full Stack Developer · AI Systems Builder
+| Role | Email | Password |
+|:---|:---|:---|
+| Admin | `admin@wearekids.com` | `123456` |
+| Teacher | `teacher1@wearekids.com` | `123456` |
+| Student | `student1@wearekids.com` | `123456` |
 
 <br />
+
+**Built by Zohair Azmat** — Full Stack Developer · AI Systems Builder
 
 *This project represents a transition from learning to building real AI-powered products.*
 
 <br />
 
 [![GitHub](https://img.shields.io/badge/GitHub-zohair--azmat--ai-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/zohair-azmat-ai)
+[![Live Demo](https://img.shields.io/badge/Live_Demo-we--are--kids--lms-16A34A?style=for-the-badge&logo=vercel&logoColor=white)](https://we-are-kids-lms-live.vercel.app/)
 
 </div>
