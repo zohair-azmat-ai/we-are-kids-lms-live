@@ -4,8 +4,16 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
+import { AIInsightsPanel } from "@/components/ai-insights-panel";
+import { AnalyticsBarChart } from "@/components/analytics-bar-chart";
 import { DashboardShell } from "@/components/dashboard-shell";
-import { fetchRecordings, startLiveClass, type RecordingItem } from "@/lib/api";
+import {
+  fetchRecordings,
+  fetchTeacherAnalytics,
+  startLiveClass,
+  type RecordingItem,
+  type TeacherAnalyticsResponse,
+} from "@/lib/api";
 import { getRecordingStatus } from "@/lib/recordings";
 
 export default function TeacherDashboardPage() {
@@ -14,6 +22,7 @@ export default function TeacherDashboardPage() {
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState("");
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
+  const [analytics, setAnalytics] = useState<TeacherAnalyticsResponse | null>(null);
   const [recordingsError, setRecordingsError] = useState("");
   const [isLoadingRecordings, setIsLoadingRecordings] = useState(true);
 
@@ -21,8 +30,12 @@ export default function TeacherDashboardPage() {
     async function loadRecordings() {
       try {
         setIsLoadingRecordings(true);
-        const savedRecordings = await fetchRecordings();
+        const [savedRecordings, analyticsResponse] = await Promise.all([
+          fetchRecordings(),
+          fetchTeacherAnalytics(),
+        ]);
         setRecordings(savedRecordings);
+        setAnalytics(analyticsResponse);
       } catch (requestError) {
         setRecordingsError(
           requestError instanceof Error
@@ -107,6 +120,69 @@ export default function TeacherDashboardPage() {
             View Recordings
           </button>
         </section>
+      </div>
+
+      {analytics ? (
+        <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-sky-600">
+                Teaching Analytics
+              </p>
+              <h2 className="mt-2 text-2xl font-semibold text-slate-800">
+                Mini classroom performance snapshot
+              </h2>
+            </div>
+            <p className="text-sm text-slate-500">{analytics.participation_summary}</p>
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-5">
+            {[
+              { label: "Assigned Classes", value: analytics.assigned_classes, accent: "text-blue-600" },
+              { label: "Live Sessions", value: analytics.live_sessions_run, accent: "text-red-500" },
+              { label: "Recordings", value: analytics.recordings_created, accent: "text-amber-600" },
+              { label: "Enrolled Students", value: analytics.enrolled_students, accent: "text-emerald-600" },
+              { label: "Avg Class Size", value: analytics.average_class_size, accent: "text-violet-600" },
+            ].map((item) => (
+              <article
+                key={item.label}
+                className="rounded-[1.75rem] border border-slate-100 bg-slate-50 p-4"
+              >
+                <p className={`text-xs font-semibold uppercase tracking-[0.22em] ${item.accent}`}>
+                  {item.label}
+                </p>
+                <p className="mt-3 text-3xl font-semibold text-slate-800">{item.value}</p>
+              </article>
+            ))}
+          </div>
+
+          <div className="mt-5 grid gap-4 xl:grid-cols-[1fr_0.8fr]">
+            <AnalyticsBarChart
+              title="Your Live Activity"
+              subtitle="Last 7 days"
+              points={analytics.live_activity_points}
+              accentClassName="bg-red-500"
+            />
+            <section className="rounded-[1.85rem] border border-slate-100 bg-slate-50 p-5">
+              <p className="text-sm font-semibold text-slate-800">Participation summary</p>
+              <div className="mt-4 space-y-4">
+                <div className="rounded-2xl border border-white bg-white px-4 py-4 text-sm text-slate-700">
+                  Active learners: {analytics.active_students}
+                </div>
+                <div className="rounded-2xl border border-white bg-white px-4 py-4 text-sm text-slate-700">
+                  Total enrolled learners: {analytics.enrolled_students}
+                </div>
+                <div className="rounded-2xl border border-white bg-white px-4 py-4 text-sm text-slate-700">
+                  {analytics.participation_summary}
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+      ) : null}
+
+      <div className="mt-8">
+        <AIInsightsPanel title="Teaching Insights" />
       </div>
 
       <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">

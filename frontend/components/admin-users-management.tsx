@@ -17,6 +17,7 @@ import {
   type AdminTeacherInput,
   type UserStatus,
 } from "@/lib/api";
+import Link from "next/link";
 
 type EntityType = "teachers" | "students";
 
@@ -59,6 +60,8 @@ export function AdminUsersManagement({
 
   const heading = isTeachers ? "Teachers" : "Students";
   const singularLabel = isTeachers ? "teacher" : "student";
+  const isLimitError =
+    error.includes("Upgrade your plan") || error.includes("plan allows up to");
 
   async function loadItems() {
     try {
@@ -242,7 +245,23 @@ export function AdminUsersManagement({
 
         {error ? (
           <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 px-4 py-4 text-sm text-red-600">
-            {error}
+            <p>{error}</p>
+            {isLimitError ? (
+              <div className="mt-3 flex flex-wrap gap-3">
+                <Link
+                  href="/pricing"
+                  className="inline-flex items-center justify-center rounded-full bg-red-500 px-4 py-2 text-xs font-semibold text-white"
+                >
+                  View Plans
+                </Link>
+                <Link
+                  href="/admin/billing"
+                  className="inline-flex items-center justify-center rounded-full border border-red-200 bg-white px-4 py-2 text-xs font-semibold text-red-700"
+                >
+                  Upgrade Plan
+                </Link>
+              </div>
+            ) : null}
           </div>
         ) : null}
 

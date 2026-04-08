@@ -813,6 +813,14 @@ export function LiveClassroomRoom({
                 {recordingSuccess}
               </div>
             ) : null}
+
+            {remoteParticipants.length === 0 ? (
+              <div className="mt-4 rounded-[1.25rem] border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-600">
+                {role === "teacher"
+                  ? "No students are visible yet. Keep the room open and they will appear automatically."
+                  : "Waiting for the teacher or classmates to appear in the room."}
+              </div>
+            ) : null}
           </section>
 
           <div className="grid gap-6">

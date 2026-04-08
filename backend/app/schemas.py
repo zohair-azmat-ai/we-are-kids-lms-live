@@ -186,9 +186,11 @@ class AuthLoginResponse(BaseModel):
 
 
 class BillingPlanFeatures(BaseModel):
-    teachers_limit: int
-    students_limit: int
-    classes_limit: int
+    teachers_limit: int | None
+    students_limit: int | None
+    classes_limit: int | None
+    recordings_access: Literal["basic", "full"]
+    priority_features: bool
     monthly_label: str
     audience: str
     highlights: list[str]
@@ -214,6 +216,90 @@ class BillingSubscription(BaseModel):
     teachers_count: int
     students_count: int
     classes_count: int
+
+
+class BillingUsageMetric(BaseModel):
+    current: int
+    limit: int | None
+    remaining: int | None
+    is_unlimited: bool
+    percent_used: int
+    is_near_limit: bool
+    is_at_limit: bool
+    upgrade_message: str | None = None
+
+
+class BillingUsageSummary(BaseModel):
+    plan: BillingPlan
+    subscription_status: str
+    teacher_count: int
+    teacher_limit: int | None
+    student_count: int
+    student_limit: int | None
+    class_count: int
+    class_limit: int | None
+    teachers: BillingUsageMetric
+    students: BillingUsageMetric
+    classes: BillingUsageMetric
+    recordings_access: Literal["basic", "full"]
+    priority_features: bool
+    warnings: list[str]
+
+
+class AIChatRequest(BaseModel):
+    question: str
+
+
+class AIChatResponse(BaseModel):
+    answer: str
+    suggestions: list[str]
+    source: Literal["openai", "fallback"]
+
+
+class AIInsightItem(BaseModel):
+    id: str
+    title: str
+    message: str
+    severity: Literal["info", "warning", "critical"]
+    cta_label: str | None = None
+    cta_href: str | None = None
+
+
+class AIInsightsResponse(BaseModel):
+    generated_at: datetime
+    summary: str
+    items: list[AIInsightItem]
+
+
+class ActivityPoint(BaseModel):
+    label: str
+    value: int
+
+
+class AdminAnalyticsResponse(BaseModel):
+    total_users: int
+    total_teachers: int
+    total_students: int
+    active_classes: int
+    live_sessions_count: int
+    recordings_count: int
+    active_students: int
+    activity_change_label: str
+    class_fill_ratio: int
+    plan_usage_summary: BillingUsageSummary
+    live_activity_points: list[ActivityPoint]
+    recording_activity_points: list[ActivityPoint]
+
+
+class TeacherAnalyticsResponse(BaseModel):
+    assigned_classes: int
+    live_sessions_run: int
+    recordings_created: int
+    enrolled_students: int
+    active_students: int
+    average_class_size: int
+    participation_summary: str
+    live_activity_points: list[ActivityPoint]
 
 
 class BillingCheckoutRequest(BaseModel):

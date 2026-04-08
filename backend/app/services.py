@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
@@ -14,11 +14,16 @@ from app.schemas import (
     BillingPlanFeatures,
     BillingPlanInfo,
     BillingSubscription,
+    BillingUsageMetric,
+    BillingUsageSummary,
+    ActivityPoint,
+    AdminAnalyticsResponse,
     ClassSummary,
     LiveClass,
     LiveSessionSummary,
     RecordingItem,
     StudentSummary,
+    TeacherAnalyticsResponse,
     TeacherSummary,
 )
 
@@ -27,42 +32,48 @@ PLAN_FEATURES: dict[BillingPlan, dict[str, object]] = {
     "starter": {
         "name": "Starter",
         "description": "For a small school getting its digital classrooms online.",
-        "teachers_limit": 3,
-        "students_limit": 30,
-        "classes_limit": 6,
+        "teachers_limit": 2,
+        "students_limit": 10,
+        "classes_limit": 3,
+        "recordings_access": "basic",
+        "priority_features": False,
         "monthly_label": "Entry plan",
         "audience": "Small school",
         "highlights": [
             "Core nursery LMS dashboard",
             "LiveKit classroom sessions",
-            "Basic recordings and admin access",
+            "Basic recordings access",
         ],
     },
     "standard": {
         "name": "Standard",
         "description": "For growing schools that need more teachers, classes, and students.",
-        "teachers_limit": 12,
-        "students_limit": 180,
-        "classes_limit": 24,
+        "teachers_limit": 10,
+        "students_limit": 100,
+        "classes_limit": 20,
+        "recordings_access": "full",
+        "priority_features": False,
         "monthly_label": "Growth plan",
         "audience": "Growing school",
         "highlights": [
             "Higher classroom and enrollment capacity",
-            "Subscription billing with portal access",
+            "Full recordings access",
             "Better room for expanding teams",
         ],
     },
     "premium": {
         "name": "Premium",
         "description": "For advanced usage across larger school operations.",
-        "teachers_limit": 50,
-        "students_limit": 1000,
-        "classes_limit": 120,
+        "teachers_limit": None,
+        "students_limit": None,
+        "classes_limit": None,
+        "recordings_access": "full",
+        "priority_features": True,
         "monthly_label": "Advanced plan",
         "audience": "Advanced usage",
         "highlights": [
-            "Highest LMS capacity limits",
-            "Priority-ready structure for expansion",
+            "Unlimited core capacity",
+            "Priority-ready features enabled",
             "Best fit for multi-team operations",
         ],
     },
@@ -468,9 +479,11 @@ def get_billing_account_by_subscription_id(
 def get_plan_features(plan: BillingPlan) -> BillingPlanFeatures:
     plan_config = PLAN_FEATURES[plan]
     return BillingPlanFeatures(
-        teachers_limit=int(plan_config["teachers_limit"]),
-        students_limit=int(plan_config["students_limit"]),
-        classes_limit=int(plan_config["classes_limit"]),
+        teachers_limit=cast(int | None, plan_config["teachers_limit"]),
+        students_limit=cast(int | None, plan_config["students_limit"]),
+        classes_limit=cast(int | None, plan_config["classes_limit"]),
+        recordings_access=cast(str, plan_config["recordings_access"]),
+        priority_features=bool(plan_config["priority_features"]),
         monthly_label=str(plan_config["monthly_label"]),
         audience=str(plan_config["audience"]),
         highlights=[str(item) for item in plan_config["highlights"]],
@@ -507,6 +520,90 @@ def get_current_usage(db: Session) -> dict[str, int]:
     }
 
 
+def build_usage_metric(current: int, limit: int | None, label: str) -> BillingUsageMetric:
+    is_unlimited = limit is None
+    remaining = None if is_unlimited else max(0, limit - current)
+    percent_used = 0 if is_unlimited or limit == 0 else min(100, round((current / limit) * 100))
+    is_at_limit = False if is_unlimited else current >= limit
+    is_near_limit = False if is_unlimited else current >= max(1, int(limit * 0.8))
+    upgrade_message = None
+
+    if is_at_limit:
+        upgrade_message = f"Upgrade your plan to add more {label.lower()}."
+    elif is_near_limit:
+        upgrade_message = f"You are close to your {label.lower()} limit."
+
+    return BillingUsageMetric(
+        current=current,
+        limit=limit,
+        remaining=remaining,
+        is_unlimited=is_unlimited,
+        percent_used=percent_used,
+        is_near_limit=is_near_limit,
+        is_at_limit=is_at_limit,
+        upgrade_message=upgrade_message,
+    )
+
+
+def build_billing_usage_summary(db: Session, account: BillingAccount) -> BillingUsageSummary:
+    usage = get_current_usage(db)
+    current_plan = cast(BillingPlan, account.plan if account.plan in PLAN_FEATURES else "starter")
+    features = get_plan_features(current_plan)
+
+    teachers_metric = build_usage_metric(
+        usage["teachers_count"], features.teachers_limit, "Teachers"
+    )
+    students_metric = build_usage_metric(
+        usage["students_count"], features.students_limit, "Students"
+    )
+    classes_metric = build_usage_metric(
+        usage["classes_count"], features.classes_limit, "Classes"
+    )
+
+    warnings: list[str] = []
+
+    if teachers_metric.is_at_limit:
+        warnings.append(
+            f"{PLAN_FEATURES[current_plan]['name']} plan allows up to {features.teachers_limit} teachers."
+        )
+    elif teachers_metric.is_near_limit and not teachers_metric.is_unlimited:
+        warnings.append("You are close to your teacher limit.")
+
+    if students_metric.is_at_limit:
+        warnings.append(
+            f"{PLAN_FEATURES[current_plan]['name']} plan allows up to {features.students_limit} students."
+        )
+    elif students_metric.is_near_limit and not students_metric.is_unlimited:
+        warnings.append("You are close to your student limit.")
+
+    if classes_metric.is_at_limit:
+        warnings.append(
+            f"{PLAN_FEATURES[current_plan]['name']} plan allows up to {features.classes_limit} classes."
+        )
+    elif classes_metric.is_near_limit and not classes_metric.is_unlimited:
+        warnings.append("You are close to your class limit.")
+
+    if current_plan != "premium":
+        warnings.append("Upgrade to Premium for unlimited core capacity and priority-ready features.")
+
+    return BillingUsageSummary(
+        plan=current_plan,
+        subscription_status=account.subscription_status,
+        teacher_count=usage["teachers_count"],
+        teacher_limit=features.teachers_limit,
+        student_count=usage["students_count"],
+        student_limit=features.students_limit,
+        class_count=usage["classes_count"],
+        class_limit=features.classes_limit,
+        teachers=teachers_metric,
+        students=students_metric,
+        classes=classes_metric,
+        recordings_access=features.recordings_access,
+        priority_features=features.priority_features,
+        warnings=warnings,
+    )
+
+
 def build_billing_subscription(db: Session, account: BillingAccount) -> BillingSubscription:
     usage = get_current_usage(db)
     current_plan = account.plan if account.plan in PLAN_FEATURES else "starter"
@@ -525,6 +622,122 @@ def build_billing_subscription(db: Session, account: BillingAccount) -> BillingS
     )
 
 
+def build_recent_activity_points(
+    source_dates: list[datetime | None],
+    *,
+    days: int = 7,
+) -> list[ActivityPoint]:
+    today = utc_now().date()
+    counts: dict[str, int] = {}
+
+    for offset in range(days - 1, -1, -1):
+        label = (today - timedelta(days=offset)).strftime("%a")
+        counts[label] = 0
+
+    for item in source_dates:
+        if not item:
+            continue
+
+        item_date = item.date()
+        delta = (today - item_date).days
+
+        if 0 <= delta < days:
+            label = item_date.strftime("%a")
+            counts[label] = counts.get(label, 0) + 1
+
+    return [ActivityPoint(label=label, value=value) for label, value in counts.items()]
+
+
+def build_admin_analytics(db: Session) -> AdminAnalyticsResponse:
+    account = get_or_create_billing_account(db)
+    plan_usage_summary = build_billing_usage_summary(db, account)
+    teachers = db.scalars(select(User).where(User.role == "teacher")).all()
+    students = db.scalars(select(User).where(User.role == "student")).all()
+    classes = db.scalars(select(Classroom)).all()
+    live_sessions = db.scalars(select(LiveSession)).all()
+    recordings = db.scalars(select(Recording)).all()
+
+    active_classes = len([classroom for classroom in classes if classroom.status == "active"])
+    active_students = len([student for student in students if student.status == "active"])
+    live_sessions_count = len([session for session in live_sessions if session.status == "live"])
+
+    class_sizes = [
+        len(db.scalars(select(Enrollment.student_id).where(Enrollment.class_id == classroom.id)).all())
+        for classroom in classes
+    ]
+    full_threshold = 8
+    filled_classes = len([size for size in class_sizes if size >= full_threshold])
+    class_fill_ratio = 0 if not classes else round((filled_classes / len(classes)) * 100)
+
+    recent_live_sessions = [session.started_at for session in live_sessions]
+    recent_recordings = [recording.created_at for recording in recordings]
+    recent_live_points = build_recent_activity_points(recent_live_sessions)
+    recent_recording_points = build_recent_activity_points(recent_recordings)
+
+    change_total = sum(point.value for point in recent_live_points[-3:]) + sum(
+        point.value for point in recent_recording_points[-3:]
+    )
+    activity_change_label = (
+        "Activity is trending up this week."
+        if change_total >= 3
+        else "Activity is steady. Encourage more live sessions for a stronger demo."
+    )
+
+    return AdminAnalyticsResponse(
+        total_users=len(teachers) + len(students) + len(db.scalars(select(User).where(User.role == "admin")).all()),
+        total_teachers=len(teachers),
+        total_students=len(students),
+        active_classes=active_classes,
+        live_sessions_count=live_sessions_count,
+        recordings_count=len(recordings),
+        active_students=active_students,
+        activity_change_label=activity_change_label,
+        class_fill_ratio=class_fill_ratio,
+        plan_usage_summary=plan_usage_summary,
+        live_activity_points=recent_live_points,
+        recording_activity_points=recent_recording_points,
+    )
+
+
+def build_teacher_analytics(db: Session, teacher: User) -> TeacherAnalyticsResponse:
+    classes = db.scalars(
+        select(Classroom).where(Classroom.teacher_id == teacher.id).order_by(Classroom.title.asc())
+    ).all()
+    live_sessions = db.scalars(
+        select(LiveSession).where(LiveSession.teacher_id == teacher.id).order_by(LiveSession.started_at.desc())
+    ).all()
+    recordings = db.scalars(
+        select(Recording).where(Recording.teacher_id == teacher.id).order_by(Recording.created_at.desc())
+    ).all()
+
+    class_ids = [classroom.id for classroom in classes]
+    enrollments = db.scalars(
+        select(Enrollment).where(Enrollment.class_id.in_(class_ids))
+    ).all() if class_ids else []
+    student_ids = list({enrollment.student_id for enrollment in enrollments})
+    students = db.scalars(
+        select(User).where(User.id.in_(student_ids))
+    ).all() if student_ids else []
+    active_students = len([student for student in students if student.status == "active"])
+    average_class_size = 0 if not classes else round(len(enrollments) / len(classes))
+    participation_summary = (
+        f"{active_students} active learners across {len(classes)} assigned classes."
+        if classes
+        else "No classes assigned yet. Add a class to begin tracking participation."
+    )
+
+    return TeacherAnalyticsResponse(
+        assigned_classes=len(classes),
+        live_sessions_run=len(live_sessions),
+        recordings_created=len(recordings),
+        enrolled_students=len(student_ids),
+        active_students=active_students,
+        average_class_size=average_class_size,
+        participation_summary=participation_summary,
+        live_activity_points=build_recent_activity_points([session.started_at for session in live_sessions]),
+    )
+
+
 def require_admin_user(db: Session, admin_email: str) -> User:
     admin_user = get_user_by_email_and_role(db, admin_email, "admin")
 
@@ -536,7 +749,7 @@ def require_admin_user(db: Session, admin_email: str) -> User:
 
 def require_plan_capacity(db: Session, resource_type: str) -> None:
     account = get_or_create_billing_account(db)
-    current_plan = account.plan if account.plan in PLAN_FEATURES else "starter"
+    current_plan = cast(BillingPlan, account.plan if account.plan in PLAN_FEATURES else "starter")
     features = get_plan_features(current_plan)
     usage = get_current_usage(db)
 
@@ -545,11 +758,18 @@ def require_plan_capacity(db: Session, resource_type: str) -> None:
     limit_value = getattr(features, limit_key)
     current_value = usage[count_key]
 
+    if limit_value is None:
+        return
+
     if current_value >= limit_value:
         plan_name = PLAN_FEATURES[current_plan]["name"]
+        singular_resource = resource_type[:-1]
         raise HTTPException(
             status_code=403,
-            detail=f"{plan_name} plan limit reached for {resource_type}. Upgrade your subscription to continue.",
+            detail=(
+                f"{plan_name} plan allows up to {limit_value} {resource_type}. "
+                f"Upgrade your plan to add more {singular_resource}s."
+            ),
         )
 
 

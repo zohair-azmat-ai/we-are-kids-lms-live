@@ -78,10 +78,10 @@ export default function StudentDashboardPage() {
           </p>
           <div className="mt-5 space-y-4">
             <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-slate-700">
-              Reading Circle
+              Join live lessons from here as soon as your teacher starts class.
             </div>
             <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-slate-700">
-              Science Exploration
+              Revisit saved recordings anytime from your recordings area.
             </div>
           </div>
         </section>
@@ -102,7 +102,9 @@ export default function StudentDashboardPage() {
             {isJoining ? "Joining..." : "Join Class"}
           </button>
           {error ? (
-            <p className="mt-4 text-sm text-red-600">{error}</p>
+            <div className="mt-4 rounded-[1.25rem] border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
+              {error}
+            </div>
           ) : null}
         </section>
       </div>

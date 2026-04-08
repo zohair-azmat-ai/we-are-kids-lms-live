@@ -16,6 +16,11 @@ export type HealthResponse = {
   status: string;
   service: string;
   version: string;
+  environment?: string;
+  port?: number;
+  livekit_configured?: boolean;
+  billing_configured?: boolean;
+  ai_configured?: boolean;
 };
 
 export type AuthUser = {
@@ -142,9 +147,11 @@ export type SuccessResponse = {
 export type BillingPlan = "starter" | "standard" | "premium";
 
 export type BillingPlanFeatures = {
-  teachers_limit: number;
-  students_limit: number;
-  classes_limit: number;
+  teachers_limit: number | null;
+  students_limit: number | null;
+  classes_limit: number | null;
+  recordings_access: "basic" | "full";
+  priority_features: boolean;
   monthly_label: string;
   audience: string;
   highlights: string[];
@@ -178,6 +185,86 @@ export type BillingCheckoutResponse = {
 
 export type BillingCustomerPortalResponse = {
   portal_url: string;
+};
+
+export type BillingUsageMetric = {
+  current: number;
+  limit: number | null;
+  remaining: number | null;
+  is_unlimited: boolean;
+  percent_used: number;
+  is_near_limit: boolean;
+  is_at_limit: boolean;
+  upgrade_message: string | null;
+};
+
+export type BillingUsageSummary = {
+  plan: BillingPlan;
+  subscription_status: string;
+  teacher_count: number;
+  teacher_limit: number | null;
+  student_count: number;
+  student_limit: number | null;
+  class_count: number;
+  class_limit: number | null;
+  teachers: BillingUsageMetric;
+  students: BillingUsageMetric;
+  classes: BillingUsageMetric;
+  recordings_access: "basic" | "full";
+  priority_features: boolean;
+  warnings: string[];
+};
+
+export type AIChatResponse = {
+  answer: string;
+  suggestions: string[];
+  source: "openai" | "fallback";
+};
+
+export type AIInsightItem = {
+  id: string;
+  title: string;
+  message: string;
+  severity: "info" | "warning" | "critical";
+  cta_label: string | null;
+  cta_href: string | null;
+};
+
+export type AIInsightsResponse = {
+  generated_at: string;
+  summary: string;
+  items: AIInsightItem[];
+};
+
+export type ActivityPoint = {
+  label: string;
+  value: number;
+};
+
+export type AdminAnalyticsResponse = {
+  total_users: number;
+  total_teachers: number;
+  total_students: number;
+  active_classes: number;
+  live_sessions_count: number;
+  recordings_count: number;
+  active_students: number;
+  activity_change_label: string;
+  class_fill_ratio: number;
+  plan_usage_summary: BillingUsageSummary;
+  live_activity_points: ActivityPoint[];
+  recording_activity_points: ActivityPoint[];
+};
+
+export type TeacherAnalyticsResponse = {
+  assigned_classes: number;
+  live_sessions_run: number;
+  recordings_created: number;
+  enrolled_students: number;
+  active_students: number;
+  average_class_size: number;
+  participation_summary: string;
+  live_activity_points: ActivityPoint[];
 };
 
 async function parseResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
@@ -730,5 +817,54 @@ export async function createBillingCustomerPortal(params: {
       }),
     },
     "Unable to open Stripe customer portal.",
+  );
+}
+
+export async function fetchBillingUsage(
+  adminEmail: string,
+): Promise<BillingUsageSummary> {
+  const query = new URLSearchParams({ admin_email: adminEmail }).toString();
+  return requestJson<BillingUsageSummary>(
+    `/api/v1/billing/usage?${query}`,
+    { cache: "no-store" },
+    "Billing usage request failed.",
+  );
+}
+
+export async function postAIChat(question: string): Promise<AIChatResponse> {
+  return requestJson<AIChatResponse>(
+    "/api/v1/ai/chat",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ question }),
+    },
+    "AI assistant request failed.",
+  );
+}
+
+export async function fetchAIInsights(): Promise<AIInsightsResponse> {
+  return requestJson<AIInsightsResponse>(
+    "/api/v1/ai/insights",
+    { cache: "no-store" },
+    "AI insights request failed.",
+  );
+}
+
+export async function fetchAdminAnalytics(): Promise<AdminAnalyticsResponse> {
+  return requestJson<AdminAnalyticsResponse>(
+    "/api/v1/admin/analytics",
+    { cache: "no-store" },
+    "Admin analytics request failed.",
+  );
+}
+
+export async function fetchTeacherAnalytics(): Promise<TeacherAnalyticsResponse> {
+  return requestJson<TeacherAnalyticsResponse>(
+    "/api/v1/teacher/analytics",
+    { cache: "no-store" },
+    "Teacher analytics request failed.",
   );
 }
