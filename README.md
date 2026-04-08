@@ -27,11 +27,23 @@
 
 <br />
 
-### 🌐 [Explore the live AI LMS platform →](https://we-are-kids-lms-live.vercel.app/)
-
 *Built by [Zohair Azmat](https://github.com/zohair-azmat-ai) — Full Stack Developer · AI Systems Builder*
 
 </div>
+
+---
+
+## 🚀 Live Demo
+
+👉 **[https://we-are-kids-lms-live.vercel.app/](https://we-are-kids-lms-live.vercel.app/)**
+
+Explore the full AI-powered LMS with live classrooms, SaaS billing, and analytics.
+
+| Role | Email | Password |
+|:---|:---|:---|
+| Admin | `admin@wearekids.com` | `123456` |
+| Teacher | `teacher1@wearekids.com` | `123456` |
+| Student | `student1@wearekids.com` | `123456` |
 
 ---
 
@@ -107,11 +119,6 @@
 ---
 
 ## 📸 Product Screens
-
-### 🏠 Landing Page
-![Landing Page](./frontend/public/images/hero.png)
-
-<br />
 
 ### 🎥 Live Classroom
 ![Live Classroom](./frontend/public/images/live-class.png)
@@ -283,17 +290,9 @@ CORS_ORIGINS=http://localhost:3000
 
 <div align="center">
 
-## 🚀 Ready to Explore?
+## 🔥 Ready to Explore?
 
-### 🌐 [we-are-kids-lms-live.vercel.app](https://we-are-kids-lms-live.vercel.app/)
-
-| Role | Email | Password |
-|:---|:---|:---|
-| Admin | `admin@wearekids.com` | `123456` |
-| Teacher | `teacher1@wearekids.com` | `123456` |
-| Student | `student1@wearekids.com` | `123456` |
-
-<br />
+👉 **Live Demo: [https://we-are-kids-lms-live.vercel.app/](https://we-are-kids-lms-live.vercel.app/)**
 
 **Built by Zohair Azmat** — Full Stack Developer · AI Systems Builder
 
