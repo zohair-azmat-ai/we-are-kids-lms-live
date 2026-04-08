@@ -381,8 +381,9 @@ export default function AdminDashboardPage() {
         </div>
 
         {isLoadingOverview ? (
-          <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-slate-700">
-            Loading live sessions...
+          <div className="mt-5 space-y-3 animate-pulse">
+            <div className="h-14 rounded-2xl bg-slate-100" />
+            <div className="h-14 rounded-2xl bg-slate-100" />
           </div>
         ) : liveSessions.length ? (
           <div className="mt-5 space-y-4">
@@ -424,8 +425,9 @@ export default function AdminDashboardPage() {
           </button>
         </div>
         {isLoadingRecordings ? (
-          <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-slate-700">
-            Loading recordings...
+          <div className="mt-5 space-y-3 animate-pulse">
+            <div className="h-14 rounded-2xl bg-slate-100" />
+            <div className="h-14 rounded-2xl bg-slate-100" />
           </div>
         ) : recordingsError ? (
           <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 px-4 py-4 text-red-600">

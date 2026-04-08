@@ -91,7 +91,7 @@ export function DashboardShell({
   }
 
   return (
-    <main className="min-h-screen pb-[max(100px,calc(env(safe-area-inset-bottom)+100px))]">
+    <main className="min-h-screen pb-[max(128px,calc(env(safe-area-inset-bottom)+128px))]">
       <div className="mx-auto max-w-7xl px-6 py-6 sm:px-8 lg:px-10">
         <header className="rounded-[2rem] border border-slate-100 bg-white px-5 py-4 shadow-soft sm:px-6">
           <div className="flex items-center justify-between gap-4">

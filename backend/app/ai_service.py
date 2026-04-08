@@ -178,38 +178,39 @@ def build_ai_snapshot(db: Session, current_user: User) -> dict[str, Any]:
 
 
 def _build_default_ai_insights(scope: str) -> AIInsightsResponse:
-    dashboard_href = "/admin/dashboard" if scope == "admin" else "/teacher/dashboard"
+    billing_href = "/admin/billing" if scope == "admin" else "/teacher/dashboard"
     recordings_href = "/admin/recordings" if scope == "admin" else "/teacher/recordings"
+    live_href = "/admin/live-sessions" if scope == "admin" else "/teacher/dashboard"
     return AIInsightsResponse(
         generated_at=utc_now(),
-        summary="Operations snapshot is available with baseline recommendations.",
+        summary="All systems are stable. Schedule a live session or review recordings to keep learners engaged.",
         items=[
-            AIInsightItem(
-                id="capacity-default",
-                alert_type="capacity",
-                title="Capacity baseline",
-                message="Monitor teacher, student, and class limits to prevent enrollment bottlenecks.",
-                severity="warning",
-                cta_label="Open Billing" if scope == "admin" else "Open Dashboard",
-                cta_href="/admin/billing" if scope == "admin" else dashboard_href,
-            ),
             AIInsightItem(
                 id="engagement-default",
                 alert_type="engagement",
-                title="Engagement baseline",
-                message="Track attendance and session activity each week to catch low participation early.",
-                severity="info",
-                cta_label="Open Dashboard",
-                cta_href=dashboard_href,
+                title="Schedule your next live session",
+                message="No live sessions have run recently. Starting a session keeps attendance records fresh and learners on track.",
+                severity="warning",
+                cta_label="Go to Live Sessions",
+                cta_href=live_href,
             ),
             AIInsightItem(
                 id="status-default",
                 alert_type="status",
-                title="Recording continuity",
-                message="Keep recent recordings updated so families and staff can review class progress.",
+                title="Review expiring recordings",
+                message="Check your recordings panel to make sure key lessons haven't expired. Families rely on replays between sessions.",
                 severity="info",
-                cta_label="Manage Recordings",
+                cta_label="Open Recordings",
                 cta_href=recordings_href,
+            ),
+            AIInsightItem(
+                id="capacity-default",
+                alert_type="capacity",
+                title="Plan capacity looks healthy",
+                message="Enrollment limits are within range. Review your billing dashboard if you expect to add more teachers or students soon.",
+                severity="info",
+                cta_label="View Billing",
+                cta_href=billing_href,
             ),
         ],
     )
@@ -287,97 +288,101 @@ def build_ai_insights_from_snapshot(snapshot: dict[str, Any]) -> AIInsightsRespo
         if usage[resource_name]["is_near_limit"] and resource_name not in at_limit_resources
     ]
 
-    capacity_parts: list[str] = []
+    # Capacity + upgrade merged into one alert to avoid two critical cards for the same root cause
     if at_limit_resources:
-        capacity_parts.append(
-            f"Plan capacity is reached for {', '.join(at_limit_resources)}."
-        )
-    if near_limit_resources:
-        capacity_parts.append(
-            f"Usage is near the limit for {', '.join(near_limit_resources)}."
-        )
-    if full_classes:
-        capacity_parts.append(
-            f"{len(full_classes)} class(es) are already at or above {snapshot['full_class_threshold']} learners."
-        )
-
-    if capacity_parts:
-        capacity_severity = "critical" if at_limit_resources else "warning"
+        limit_list = ", ".join(at_limit_resources)
+        extra = f" Additionally, {len(full_classes)} class(es) are at the learner threshold." if full_classes else ""
         upsert_alert(
             alert_type="capacity",
-            title="Capacity needs attention",
-            message=" ".join(capacity_parts),
-            severity=capacity_severity,
-            cta_label="Open Billing" if scope == "admin" else None,
-            cta_href="/admin/billing" if scope == "admin" else None,
-        )
-
-    should_upgrade = bool(at_limit_resources or near_limit_resources or usage["warnings"])
-    if should_upgrade:
-        upgrade_message = (
-            "Upgrade is recommended to unlock more teacher, student, and class capacity."
-            if at_limit_resources
-            else "Plan usage trend suggests upgrading soon to avoid enrollment or staffing blocks."
-        )
-        upsert_alert(
-            alert_type="upgrade",
-            title="Upgrade recommendation",
-            message=upgrade_message,
-            severity="critical" if at_limit_resources else "warning",
-            cta_label="View Plans",
+            title=f"Plan limit reached for {limit_list}",
+            message=(
+                f"Enrollment is blocked for {limit_list} — your plan has no remaining slots.{extra} "
+                "Upgrade now to unblock enrolment and avoid disrupting teachers or families."
+            ),
+            severity="critical",
+            cta_label="Upgrade Plan",
             cta_href="/pricing",
         )
-
-    engagement_signals: list[str] = []
-    engagement_severity = "info"
-    if recent_activity["recent_live_sessions"] == 0:
-        engagement_signals.append("No live sessions were started in the last 7 days.")
-        engagement_severity = "warning"
-    else:
-        engagement_signals.append(
-            f"{recent_activity['recent_live_sessions']} live session(s) ran in the last 7 days."
-        )
-
-    if recent_activity["attendance_events_last_7_days"] == 0:
-        engagement_signals.append("Attendance activity is missing in the past 7 days.")
-        engagement_severity = "warning"
-    else:
-        engagement_signals.append(
-            f"Average attendance was {recent_activity['avg_attendance_per_session']} learner event(s) per active session."
-        )
-
-    if counts["teachers_total"] > 0:
-        active_ratio = round((counts["teachers_active"] / counts["teachers_total"]) * 100)
-        if active_ratio < 50:
-            engagement_signals.append(
-                f"Only {active_ratio}% of teachers are active right now, so teaching activity may drop."
-            )
-            engagement_severity = "critical" if active_ratio == 0 else "warning"
-        else:
-            engagement_signals.append(f"Teacher activity is stable at {active_ratio}% active.")
-
-    if recent_activity["recent_recordings"] == 0:
-        engagement_signals.append("No new recordings were created in the last 7 days.")
-
-    upsert_alert(
-        alert_type="engagement",
-        title="Engagement pulse",
-        message=" ".join(engagement_signals),
-        severity=engagement_severity,
-        cta_label="Review Live Sessions" if scope == "admin" else "Open Dashboard",
-        cta_href="/admin/live-sessions" if scope == "admin" else "/teacher/dashboard",
-    )
-
-    if counts["recordings_expiring_soon"] > 0:
+    elif near_limit_resources:
+        near_list = ", ".join(near_limit_resources)
+        full_note = f" {len(full_classes)} class(es) are also nearing capacity." if full_classes else ""
         upsert_alert(
-            alert_type="engagement",
-            title="Engagement pulse",
+            alert_type="capacity",
+            title="Approaching plan limits",
             message=(
-                f"{counts['recordings_expiring_soon']} recording(s) expire within 2 days; "
-                "refresh key lessons to keep replay access available."
+                f"Usage is close to the ceiling for {near_list}.{full_note} "
+                "Consider upgrading before enrolment is blocked."
+            ),
+            severity="warning",
+            cta_label="Review Billing",
+            cta_href="/admin/billing" if scope == "admin" else "/pricing",
+        )
+    elif full_classes:
+        upsert_alert(
+            alert_type="capacity",
+            title=f"{len(full_classes)} class(es) are full",
+            message=(
+                f"{len(full_classes)} class(es) have reached {snapshot['full_class_threshold']} or more learners. "
+                "Adding a new class section will help distribute enrolment."
             ),
             severity="info",
-            cta_label="Manage Recordings",
+            cta_label="Manage Classes",
+            cta_href="/admin/classes" if scope == "admin" else None,
+        )
+
+    # Engagement — pick the single most important signal only
+    no_sessions = recent_activity["recent_live_sessions"] == 0
+    no_attendance = recent_activity["attendance_events_last_7_days"] == 0
+
+    if no_sessions:
+        upsert_alert(
+            alert_type="engagement",
+            title="No live sessions this week",
+            message=(
+                "No live sessions have been started in the last 7 days. "
+                "Scheduling a lesson keeps attendance records active and learners engaged."
+            ),
+            severity="warning",
+            cta_label="Start a Session",
+            cta_href="/admin/live-sessions" if scope == "admin" else "/teacher/dashboard",
+        )
+    elif no_attendance:
+        upsert_alert(
+            alert_type="engagement",
+            title="Attendance data missing",
+            message=(
+                f"{recent_activity['recent_live_sessions']} session(s) ran this week but no attendance was recorded. "
+                "Check that the attendance panel is active during lessons."
+            ),
+            severity="warning",
+            cta_label="Review Sessions",
+            cta_href="/admin/live-sessions" if scope == "admin" else "/teacher/dashboard",
+        )
+    else:
+        avg = recent_activity["avg_attendance_per_session"]
+        upsert_alert(
+            alert_type="engagement",
+            title="Weekly activity looks healthy",
+            message=(
+                f"{recent_activity['recent_live_sessions']} session(s) ran this week "
+                f"with an average of {avg} learner(s) per session."
+            ),
+            severity="info",
+            cta_label="View Sessions",
+            cta_href="/admin/live-sessions" if scope == "admin" else "/teacher/dashboard",
+        )
+
+    # Recordings expiry — only if genuinely urgent
+    if counts["recordings_expiring_soon"] > 0:
+        upsert_alert(
+            alert_type="status",
+            title=f"{counts['recordings_expiring_soon']} recording(s) expiring soon",
+            message=(
+                f"{counts['recordings_expiring_soon']} recording(s) will expire within 2 days. "
+                "Review or replace them so families keep replay access."
+            ),
+            severity="warning",
+            cta_label="Open Recordings",
             cta_href="/admin/recordings" if scope == "admin" else "/teacher/recordings",
         )
 
@@ -390,7 +395,10 @@ def build_ai_insights_from_snapshot(snapshot: dict[str, Any]) -> AIInsightsRespo
         reverse=True,
     )
     top_items = sorted_items[:MAX_ALERT_ITEMS]
-    summary = top_items[0].message if top_items else "Operational insights are available."
+
+    # Build a short, specific summary from the top alert
+    top = top_items[0]
+    summary = top.title if len(top.title) < 80 else top.message[:120]
     return AIInsightsResponse(generated_at=utc_now(), summary=summary, items=top_items)
 
 
