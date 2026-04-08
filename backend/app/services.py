@@ -98,7 +98,12 @@ def delete_recording_file(recording_file_path: str) -> None:
         file_path.unlink()
 
 
+_NO_FILE_PATHS = {"pending", "no-file", "browser-recorded"}
+
+
 def build_recording_file_url(recording: Recording) -> str:
+    if recording.file_path in _NO_FILE_PATHS:
+        return ""
     return f"/uploads/recordings/{Path(recording.file_path).name}"
 
 

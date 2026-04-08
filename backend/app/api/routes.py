@@ -58,6 +58,9 @@ from app.schemas import (
     LiveSessionSummary,
     RecordingDeleteResponse,
     RecordingItem,
+    RecordingStartRequest,
+    RecordingStartResponse,
+    RecordingStopRequest,
     RecordingUpdateRequest,
     RecordingUpdateResponse,
     StartClassRequest,
@@ -842,12 +845,80 @@ def get_ai_insights_route(
         return get_default_ai_insights(current_user.role)
 
 
+@api_router.post("/recordings/start", response_model=RecordingStartResponse)
+def start_recording_session(
+    payload: RecordingStartRequest,
+    current_user: User = Depends(get_current_user),
+) -> RecordingStartResponse:
+    """Create a recording DB entry the moment the teacher clicks Record.
+    This ensures the recording is always visible even if the file upload later fails."""
+    if current_user.role != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can record classes.")
+
+    with SessionLocal() as db:
+        classroom = get_class(db, payload.class_id)
+
+        if not classroom:
+            raise HTTPException(status_code=404, detail="Class not found.")
+
+        if classroom.teacher_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Teacher access denied for this class.")
+
+        recording_id = uuid4().hex
+        created_at = utc_now()
+        recording = Recording(
+            id=recording_id,
+            class_id=payload.class_id,
+            teacher_id=current_user.id,
+            title=(payload.title.strip() or classroom.title),
+            file_path="pending",
+            created_at=created_at,
+            expires_at=created_at + timedelta(days=30),
+            status="recording",
+        )
+        db.add(recording)
+        db.commit()
+        return RecordingStartResponse(recording_id=recording_id, message="Recording started.")
+
+
+@api_router.post("/recordings/stop", response_model=RecordingItem)
+def stop_recording_session(
+    payload: RecordingStopRequest,
+    current_user: User = Depends(get_current_user),
+) -> RecordingItem:
+    """Mark a recording as available. Called when the teacher stops recording."""
+    if current_user.role != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can stop recordings.")
+
+    with SessionLocal() as db:
+        recording = db.scalar(
+            select(Recording)
+            .options(selectinload(Recording.teacher))
+            .where(Recording.id == payload.recording_id)
+        )
+
+        if not recording:
+            raise HTTPException(status_code=404, detail="Recording session not found.")
+
+        if recording.teacher_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied for this recording.")
+
+        recording.status = "available"
+        if recording.file_path == "pending":
+            recording.file_path = "browser-recorded"
+
+        db.commit()
+        db.refresh(recording)
+        return serialize_recording(recording)
+
+
 @api_router.post("/recordings/upload", response_model=RecordingItem)
 async def upload_recording(
     class_id: str = Form(...),
     teacher_name: str = Form(...),
     title: str = Form(...),
     recorded_file: UploadFile = File(...),
+    recording_id: str = Form(default=""),
     current_user: User = Depends(get_current_user),
 ) -> RecordingItem:
     if current_user.role != "teacher":
@@ -862,22 +933,41 @@ async def upload_recording(
         if classroom.teacher_id != current_user.id:
             raise HTTPException(status_code=403, detail="Teacher access denied for this class.")
 
-        recording_id = uuid4().hex
+        # Try to write the file — if disk is unavailable (e.g. ephemeral HF Spaces), store metadata only
         file_suffix = Path(recorded_file.filename or "recording.webm").suffix or ".webm"
-        file_name = f"{recording_id}{file_suffix}"
+        new_id = recording_id.strip() or uuid4().hex
+        file_name = f"{new_id}{file_suffix}"
         destination_path = RECORDINGS_DIR / file_name
         file_bytes = await recorded_file.read()
-        destination_path.write_bytes(file_bytes)
+
+        try:
+            destination_path.write_bytes(file_bytes)
+            actual_file_path = str(destination_path)
+        except OSError:
+            logger.warning("Recording file write failed for %s — saving metadata only.", new_id)
+            actual_file_path = "no-file"
 
         created_at = utc_now()
+
+        # If a recording entry was pre-created by /recordings/start, update it; otherwise create new
+        existing = db.scalar(select(Recording).where(Recording.id == new_id)) if recording_id.strip() else None
+
+        if existing:
+            existing.title = title.strip() or existing.title
+            existing.file_path = actual_file_path
+            existing.status = "available"
+            db.commit()
+            db.refresh(existing)
+            return serialize_recording(existing, classroom.teacher)
+
         recording = Recording(
-            id=recording_id,
+            id=new_id,
             class_id=class_id,
             teacher_id=classroom.teacher_id,
             title=title.strip(),
-            file_path=str(destination_path),
+            file_path=actual_file_path,
             created_at=created_at,
-            expires_at=created_at + timedelta(days=5),
+            expires_at=created_at + timedelta(days=30),
             status="available",
         )
         db.add(recording)

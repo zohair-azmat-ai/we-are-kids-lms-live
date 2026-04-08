@@ -54,6 +54,20 @@ class RecordingDeleteResponse(BaseModel):
     recording_id: str
 
 
+class RecordingStartRequest(BaseModel):
+    class_id: str
+    title: str
+
+
+class RecordingStartResponse(BaseModel):
+    recording_id: str
+    message: str
+
+
+class RecordingStopRequest(BaseModel):
+    recording_id: str
+
+
 class TeacherSummary(BaseModel):
     teacher_id: str
     name: str

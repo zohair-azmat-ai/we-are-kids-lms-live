@@ -78,6 +78,11 @@ export type RecordingDeleteResponse = {
   recording_id: string;
 };
 
+export type RecordingStartResponse = {
+  recording_id: string;
+  message: string;
+};
+
 export type UserStatus = "active" | "inactive";
 export type ClassStatus = "active" | "archived";
 export type LiveStatus = "live" | "scheduled" | "ended";
@@ -610,17 +615,50 @@ export async function requestLiveKitToken(params: {
   );
 }
 
+export async function startRecordingSession(params: {
+  classId: string;
+  title: string;
+}): Promise<RecordingStartResponse> {
+  return requestJson<RecordingStartResponse>(
+    "/api/v1/recordings/start",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ class_id: params.classId, title: params.title }),
+    },
+    "Recording start failed.",
+  );
+}
+
+export async function stopRecordingSession(params: {
+  recordingId: string;
+}): Promise<RecordingItem> {
+  return requestJson<RecordingItem>(
+    "/api/v1/recordings/stop",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recording_id: params.recordingId }),
+    },
+    "Recording stop failed.",
+  );
+}
+
 export async function uploadRecording(params: {
   classId: string;
   teacherName: string;
   title: string;
   file: File;
+  recordingId?: string;
 }): Promise<RecordingItem> {
   const formData = new FormData();
   formData.append("class_id", params.classId);
   formData.append("teacher_name", params.teacherName);
   formData.append("title", params.title);
   formData.append("recorded_file", params.file);
+  if (params.recordingId) {
+    formData.append("recording_id", params.recordingId);
+  }
 
   return requestJson<RecordingItem>(
     "/api/v1/recordings/upload",
