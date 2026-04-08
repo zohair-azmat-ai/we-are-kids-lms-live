@@ -58,28 +58,36 @@ function VideoPreviewCard({
   const playUrl = resolvePlayUrl(recording);
 
   return (
-    <div className="mt-4 overflow-hidden rounded-[1.75rem] border border-slate-100 bg-slate-900 shadow-soft">
-      <div className="flex items-center justify-between gap-3 px-4 py-3">
+    <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200/70 bg-slate-950 shadow-2xl">
+      <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
         <p className="text-sm font-semibold text-white">{recording.title}</p>
         <button
           type="button"
           onClick={onClose}
-          className="rounded-full border border-white/20 px-3 py-1 text-xs font-semibold text-white/80 hover:bg-white/10"
+          className="premium-button btn-secondary px-3 py-1 text-xs font-semibold text-white/90"
         >
           Close
         </button>
       </div>
       {playUrl ? (
-        <video
-          ref={videoRef}
-          controls
-          autoPlay
-          className="w-full"
-          src={playUrl}
-          style={{ maxHeight: "360px" }}
-        />
+        <div className="group relative">
+          <video
+            ref={videoRef}
+            controls
+            autoPlay
+            className="w-full"
+            src={playUrl}
+            style={{ maxHeight: "360px" }}
+          />
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-black/10 to-transparent" />
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div className="rounded-full border border-white/30 bg-white/20 p-4 backdrop-blur group-hover:scale-105">
+              <span className="block h-0 w-0 border-y-[10px] border-y-transparent border-l-[16px] border-l-white" />
+            </div>
+          </div>
+        </div>
       ) : (
-        <div className="flex items-center justify-center px-6 py-10 text-sm text-white/60">
+        <div className="flex items-center justify-center px-6 py-10 text-sm text-white/70">
           No playable video file available for this recording.
         </div>
       )}
@@ -159,7 +167,7 @@ export function RecordingsManagement({
     setPreviewRecordingId((current) => (current === recordingId ? "" : recordingId));
   }
 
-async function copyShareLink(recording: RecordingItem) {
+  async function copyShareLink(recording: RecordingItem) {
     const shareUrl = `${window.location.origin}/public/recordings/${recording.recording_id}`;
     try {
       await navigator.clipboard.writeText(shareUrl);
@@ -227,7 +235,7 @@ async function copyShareLink(recording: RecordingItem) {
   return (
     <div className="space-y-6">
       {role === "admin" ? (
-        <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+        <section className="glass-card rounded-2xl p-6">
           <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">
             Filters
           </p>
@@ -235,7 +243,7 @@ async function copyShareLink(recording: RecordingItem) {
             <select
               value={teacherFilter}
               onChange={(e) => setTeacherFilter(e.target.value)}
-              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none"
+              className="rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-700 outline-none"
             >
               <option value="">All teachers</option>
               {teacherOptions.map((t) => (
@@ -247,12 +255,12 @@ async function copyShareLink(recording: RecordingItem) {
               value={classFilter}
               onChange={(e) => setClassFilter(e.target.value)}
               placeholder="Filter by class"
-              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none placeholder:text-slate-400"
+              className="rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-700 outline-none placeholder:text-slate-400"
             />
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as "" | RecordingStatus)}
-              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none"
+              className="rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-700 outline-none"
             >
               <option value="">All statuses</option>
               <option value="available">Available</option>
@@ -263,19 +271,19 @@ async function copyShareLink(recording: RecordingItem) {
         </section>
       ) : null}
 
-      <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+      <section className="glass-card rounded-2xl p-6">
         <p className="text-sm font-semibold uppercase tracking-[0.24em] text-amber-600">
           Recordings Library
         </p>
 
         {successMessage ? (
-          <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-700">
             {successMessage}
           </div>
         ) : null}
 
         {error ? (
-          <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
+          <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-600">
             {error}
           </div>
         ) : null}
@@ -298,7 +306,7 @@ async function copyShareLink(recording: RecordingItem) {
               return (
                 <div
                   key={recording.recording_id}
-                  className="rounded-[1.75rem] border border-slate-100 bg-slate-50 p-5"
+                  className="card-hover rounded-2xl border border-slate-200/70 bg-white/85 p-6 shadow-xl backdrop-blur-sm"
                 >
                   {/* Header row */}
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -316,14 +324,14 @@ async function copyShareLink(recording: RecordingItem) {
                               type="button"
                               onClick={() => void saveRename(recording.recording_id)}
                               disabled={isBusy || !draftTitle.trim()}
-                              className="rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                              className="premium-button btn-primary px-4 py-2 text-sm font-semibold disabled:opacity-60"
                             >
                               Save
                             </button>
                             <button
                               type="button"
                               onClick={() => { setEditingRecordingId(""); setDraftTitle(""); }}
-                              className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+                              className="premium-button btn-secondary px-4 py-2 text-sm font-semibold"
                             >
                               Cancel
                             </button>
@@ -356,10 +364,10 @@ async function copyShareLink(recording: RecordingItem) {
                       <button
                         type="button"
                         onClick={() => togglePreview(recording.recording_id)}
-                        className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition active:scale-95 ${
+                        className={`premium-button inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-semibold ${
                           isPreviewing
-                            ? "bg-slate-800 text-white"
-                            : "bg-blue-600 text-white shadow-sm shadow-blue-100"
+                            ? "bg-slate-900 text-white"
+                            : "btn-primary text-white"
                         }`}
                       >
                         {isPreviewing ? "Hide Preview" : "Play"}
@@ -368,7 +376,7 @@ async function copyShareLink(recording: RecordingItem) {
                     <button
                       type="button"
                       onClick={() => openWatch(recording.recording_id)}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 active:scale-95"
+                      className="premium-button btn-secondary inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-semibold"
                     >
                       Open
                     </button>
@@ -377,11 +385,11 @@ async function copyShareLink(recording: RecordingItem) {
                       onClick={() => void copyShareLink(recording)}
                       disabled={!hasVideo}
                       title={hasVideo ? "Copy share link" : "No file available to share"}
-                      className={`inline-flex items-center gap-1.5 rounded-full border px-4 py-2 text-sm font-semibold transition active:scale-95 ${
+                      className={`premium-button inline-flex items-center gap-1.5 rounded-xl border px-4 py-2 text-sm font-semibold ${
                         hasVideo
                           ? isCopied
                             ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                            : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                            : "btn-secondary"
                           : "cursor-not-allowed border-slate-100 bg-slate-50 text-slate-400"
                       }`}
                     >
@@ -390,7 +398,7 @@ async function copyShareLink(recording: RecordingItem) {
                     <button
                       type="button"
                       onClick={() => startRename(recording)}
-                      className="inline-flex items-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 active:scale-95"
+                      className="premium-button btn-secondary inline-flex items-center rounded-xl px-4 py-2 text-sm font-semibold"
                     >
                       Rename
                     </button>
@@ -398,7 +406,7 @@ async function copyShareLink(recording: RecordingItem) {
                       type="button"
                       onClick={() => void removeRecording(recording.recording_id)}
                       disabled={isBusy}
-                      className="inline-flex items-center rounded-full bg-rose-500 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-rose-100 transition active:scale-95 disabled:opacity-60"
+                      className="premium-button btn-danger inline-flex items-center rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-60"
                     >
                       Delete
                     </button>
@@ -416,8 +424,23 @@ async function copyShareLink(recording: RecordingItem) {
             })}
           </div>
         ) : (
-          <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-            No recordings match the current view.
+          <div className="mt-6 rounded-2xl border border-slate-200 bg-white/85 px-6 py-8 text-center backdrop-blur-sm">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+              <span className="text-xl font-semibold">▶</span>
+            </div>
+            <p className="mt-4 text-base font-semibold tracking-tight text-slate-800">
+              No recordings found
+            </p>
+            <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
+              Try clearing filters or refresh your library to load the latest uploaded lessons.
+            </p>
+            <button
+              type="button"
+              onClick={() => void loadRecordings()}
+              className="premium-button btn-primary mt-5 px-4 py-2 text-sm font-semibold"
+            >
+              Refresh Library
+            </button>
           </div>
         )}
       </section>
