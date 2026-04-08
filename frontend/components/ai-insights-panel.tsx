@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { fetchAIInsights, type AIInsightsResponse } from "@/lib/api";
 
@@ -21,6 +21,18 @@ type AIInsightsPanelProps = {
   title?: string;
 };
 
+function InsightsSkeleton() {
+  return (
+    <div className="mt-5 animate-pulse space-y-4">
+      <div className="h-14 rounded-2xl bg-slate-100" />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="h-36 rounded-[1.75rem] bg-slate-100" />
+        <div className="h-36 rounded-[1.75rem] bg-slate-100" />
+      </div>
+    </div>
+  );
+}
+
 export function AIInsightsPanel({
   title = "AI Insights",
 }: AIInsightsPanelProps) {
@@ -28,26 +40,26 @@ export function AIInsightsPanel({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    async function loadInsights() {
-      try {
-        setIsLoading(true);
-        setError("");
-        const response = await fetchAIInsights();
-        setInsights(response);
-      } catch (requestError) {
-        setError(
-          requestError instanceof Error
-            ? requestError.message
-            : "Unable to load AI insights.",
-        );
-      } finally {
-        setIsLoading(false);
-      }
+  const loadInsights = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError("");
+      const response = await fetchAIInsights();
+      setInsights(response);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to load AI insights.",
+      );
+    } finally {
+      setIsLoading(false);
     }
-
-    void loadInsights();
   }, []);
+
+  useEffect(() => {
+    void loadInsights();
+  }, [loadInsights]);
 
   return (
     <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
@@ -68,12 +80,17 @@ export function AIInsightsPanel({
       </div>
 
       {isLoading ? (
-        <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-slate-700">
-          Generating AI insights...
-        </div>
+        <InsightsSkeleton />
       ) : error ? (
-        <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 px-4 py-4 text-red-600">
-          {error}
+        <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 px-4 py-4">
+          <p className="text-sm text-red-600">{error}</p>
+          <button
+            type="button"
+            onClick={() => void loadInsights()}
+            className="mt-3 inline-flex items-center justify-center rounded-full border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-50"
+          >
+            Retry
+          </button>
         </div>
       ) : insights ? (
         <>

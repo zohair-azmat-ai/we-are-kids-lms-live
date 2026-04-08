@@ -1,6 +1,9 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 import stripe
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
@@ -831,8 +834,12 @@ def get_ai_insights_route(
     require_ai_access(current_user)
     require_ai_config()
 
-    with SessionLocal() as db:
-        return get_ai_insights(db, current_user)
+    try:
+        with SessionLocal() as db:
+            return get_ai_insights(db, current_user)
+    except Exception as exc:
+        logger.error("AI insights generation failed for %s: %s", current_user.email, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="AI insights are temporarily unavailable. Please try again.") from exc
 
 
 @api_router.post("/recordings/upload", response_model=RecordingItem)

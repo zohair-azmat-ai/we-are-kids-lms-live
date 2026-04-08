@@ -1,7 +1,10 @@
 import json
+import logging
 from datetime import timedelta
 from typing import Any
 from urllib import error, request
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -320,17 +323,23 @@ def _call_openai(question: str, snapshot: dict[str, Any], insights: AIInsightsRe
     )
 
     try:
-        with request.urlopen(req, timeout=30) as response:
+        with request.urlopen(req, timeout=20) as response:
             response_payload = json.loads(response.read().decode("utf-8"))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
+        logger.error("OpenAI HTTP error: %s", detail or exc.reason)
         raise RuntimeError(f"OpenAI request failed: {detail or exc.reason}") from exc
     except error.URLError as exc:
+        logger.error("OpenAI URL error: %s", exc.reason)
         raise RuntimeError("OpenAI request could not be completed.") from exc
+    except TimeoutError as exc:
+        logger.error("OpenAI request timed out")
+        raise RuntimeError("OpenAI request timed out.") from exc
 
     answer = _extract_output_text(response_payload)
 
     if not answer:
+        logger.warning("OpenAI returned an empty answer for question: %s", question[:80])
         raise RuntimeError("OpenAI returned an empty answer.")
 
     return answer
@@ -538,7 +547,8 @@ def answer_ai_chat(db: Session, current_user: User, question: str) -> AIChatResp
         answer = _call_openai(cleaned_question, snapshot, insights)
         suggestions = [item.title for item in insights.items[:3]]
         return AIChatResponse(answer=answer, suggestions=suggestions, source="openai")
-    except RuntimeError:
+    except RuntimeError as exc:
+        logger.warning("OpenAI chat failed, using fallback: %s", exc)
         answer, suggestions = _fallback_answer(cleaned_question, snapshot, insights)
         return AIChatResponse(answer=answer, suggestions=suggestions, source="fallback")
 

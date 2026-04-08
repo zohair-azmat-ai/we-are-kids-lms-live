@@ -139,42 +139,39 @@ export default function AdminDashboardPage() {
         </section>
       ) : null}
 
-      <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
-        <article className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
-          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">
-            Total Teachers
-          </p>
-          <p className="mt-4 text-4xl font-semibold text-slate-800">
-            {isLoadingOverview ? "..." : teacherCount}
-          </p>
-        </article>
-        <article className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
-          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-red-500">
-            Total Students
-          </p>
-          <p className="mt-4 text-4xl font-semibold text-slate-800">
-            {isLoadingOverview ? "..." : studentCount}
-          </p>
-        </article>
-        <article className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
-          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-amber-600">
-            Total Classes
-          </p>
-          <p className="mt-4 text-4xl font-semibold text-slate-800">
-            {isLoadingOverview ? "..." : classCount}
-          </p>
-        </article>
-        <article className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
-          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-sky-600">
-            Live Sessions
-          </p>
-          <p className="mt-4 text-4xl font-semibold text-slate-800">
-            {isLoadingOverview ? "..." : liveSessions.length}
-          </p>
-        </article>
+      <div className="grid gap-4 sm:gap-6 grid-cols-2 xl:grid-cols-4">
+        {[
+          { label: "Total Teachers", value: teacherCount, accent: "text-blue-600" },
+          { label: "Total Students", value: studentCount, accent: "text-red-500" },
+          { label: "Total Classes", value: classCount, accent: "text-amber-600" },
+          { label: "Live Sessions", value: liveSessions.length, accent: "text-sky-600" },
+        ].map((card) => (
+          <article key={card.label} className="rounded-[2rem] border border-slate-100 bg-white p-5 sm:p-6 shadow-soft">
+            <p className={`text-xs sm:text-sm font-semibold uppercase tracking-[0.24em] ${card.accent}`}>
+              {card.label}
+            </p>
+            {isLoadingOverview ? (
+              <div className="mt-4 h-10 w-16 animate-pulse rounded-xl bg-slate-100" />
+            ) : (
+              <p className="mt-4 text-3xl sm:text-4xl font-semibold text-slate-800">{card.value}</p>
+            )}
+          </article>
+        ))}
       </div>
 
-      {analytics ? (
+      {isLoadingOverview && !analytics ? (
+        <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+          <div className="animate-pulse space-y-4">
+            <div className="h-6 w-48 rounded-xl bg-slate-100" />
+            <div className="h-4 w-72 rounded-xl bg-slate-100" />
+            <div className="mt-5 grid gap-4 lg:grid-cols-3 xl:grid-cols-6">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="h-24 rounded-[1.75rem] bg-slate-100" />
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : analytics ? (
         <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -257,7 +254,19 @@ export default function AdminDashboardPage() {
         </section>
       ) : null}
 
-      {usage ? (
+      {isLoadingOverview && !usage ? (
+        <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+          <div className="animate-pulse space-y-4">
+            <div className="h-6 w-36 rounded-xl bg-slate-100" />
+            <div className="h-4 w-56 rounded-xl bg-slate-100" />
+            <div className="mt-5 grid gap-4 lg:grid-cols-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-28 rounded-[1.75rem] bg-slate-100" />
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : usage ? (
         <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -346,7 +355,7 @@ export default function AdminDashboardPage() {
         <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">
           Quick Links
         </p>
-        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <div className="mt-5 grid gap-3 sm:gap-4 grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
           {quickLinks.map((link) => (
             <button
               key={link.href}

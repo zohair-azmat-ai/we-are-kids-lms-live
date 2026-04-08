@@ -80,7 +80,7 @@ export default function TeacherDashboardPage() {
       title="Teacher Dashboard"
       subtitle="Manage your classes, start live lessons, and keep recordings organized in one calm teaching space."
     >
-      <div className="grid gap-6 lg:grid-cols-[1fr_0.9fr]">
+      <div className="grid gap-4 sm:gap-6 lg:grid-cols-[1fr_0.9fr]">
         <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
           <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">
             Assigned Classes
@@ -137,7 +137,7 @@ export default function TeacherDashboardPage() {
             <p className="text-sm text-slate-500">{analytics.participation_summary}</p>
           </div>
 
-          <div className="mt-5 grid gap-4 lg:grid-cols-5">
+          <div className="mt-5 grid gap-3 sm:gap-4 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
             {[
               { label: "Assigned Classes", value: analytics.assigned_classes, accent: "text-blue-600" },
               { label: "Live Sessions", value: analytics.live_sessions_run, accent: "text-red-500" },
