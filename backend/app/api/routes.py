@@ -117,6 +117,7 @@ from app.services import (
     update_billing_account_from_subscription,
     update_live_session_presence,
     utc_now,
+    utc_now_naive,
     validate_class_relationships,
     validate_unique_user_email,
 )
@@ -1014,7 +1015,7 @@ def get_recording_by_id(
         if not recording:
             raise HTTPException(status_code=404, detail="Recording not found.")
 
-        if recording.expires_at <= utc_now():
+        if recording.expires_at <= utc_now_naive():
             delete_recording_file(recording.file_path)
             db.delete(recording)
             db.commit()

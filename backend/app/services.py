@@ -87,6 +87,17 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def utc_now_naive() -> datetime:
+    """Return the current UTC time without tzinfo.
+
+    SQLite strips timezone info from DateTime columns on read, so comparing a
+    timezone-aware datetime against a DB-returned naive datetime raises a
+    TypeError.  Use this function when comparing against values retrieved from
+    the database.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def normalize_email(email: str) -> str:
     return email.strip().lower()
 
@@ -315,7 +326,7 @@ def mark_class_as_ended(class_id: str) -> LiveClass | None:
 def cleanup_expired_recordings() -> None:
     with SessionLocal() as db:
         expired_recordings = db.scalars(
-            select(Recording).where(Recording.expires_at <= utc_now())
+            select(Recording).where(Recording.expires_at <= utc_now_naive())
         ).all()
 
         for recording in expired_recordings:
