@@ -120,11 +120,6 @@ Explore the full AI-powered LMS with live classrooms, SaaS billing, and analytic
 
 ## 📸 Product Screens
 
-### 🎥 Live Classroom
-![Live Classroom](./frontend/public/images/live-class.png)
-
-<br />
-
 ### 🛡️ Admin Dashboard
 *Full management — users, classes, sessions, recordings, billing.*
 <!-- Add: frontend/public/images/screenshots/admin-dashboard.png -->
