@@ -8,8 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import SessionLocal
-from app.models import BillingAccount, Classroom, Enrollment, LiveSession, Recording, User
+from app.models import Attendance, BillingAccount, Classroom, Enrollment, LiveSession, Recording, User
 from app.schemas import (
+    AttendanceRecord,
+    AttendanceSummary,
     BillingPlan,
     BillingPlanFeatures,
     BillingPlanInfo,
@@ -795,3 +797,157 @@ def update_billing_account_from_subscription(
         account.subscription_status = status
 
     account.current_period_end = current_period_end
+
+
+# ---------------------------------------------------------------------------
+# Attendance service functions
+# ---------------------------------------------------------------------------
+
+
+def record_attendance_join(
+    db: Session,
+    *,
+    session_id: str,
+    class_id: str,
+    student_id: str,
+) -> None:
+    """Create or reset an attendance record when a student joins a live session."""
+    existing = db.scalar(
+        select(Attendance).where(
+            Attendance.session_id == session_id,
+            Attendance.student_id == student_id,
+        )
+    )
+
+    if existing:
+        existing.status = "present"
+        existing.left_at = None
+        existing.duration_minutes = None
+    else:
+        db.add(
+            Attendance(
+                session_id=session_id,
+                class_id=class_id,
+                student_id=student_id,
+                joined_at=utc_now(),
+                status="present",
+            )
+        )
+
+    db.commit()
+
+
+def close_attendance_record(
+    db: Session,
+    *,
+    class_id: str,
+    student_id: str,
+) -> None:
+    """Update the open attendance record when a student leaves."""
+    latest_session = get_latest_session_for_class(db, class_id)
+
+    if not latest_session:
+        return
+
+    record = db.scalar(
+        select(Attendance).where(
+            Attendance.session_id == latest_session.id,
+            Attendance.student_id == student_id,
+            Attendance.status == "present",
+        )
+    )
+
+    if not record:
+        return
+
+    now = utc_now()
+    record.left_at = now
+    record.status = "left"
+    duration_seconds = (now - record.joined_at).total_seconds()
+    record.duration_minutes = max(1, round(duration_seconds / 60))
+    db.commit()
+
+
+def build_attendance_record(record: Attendance, class_title: str) -> AttendanceRecord:
+    return AttendanceRecord(
+        id=record.id,
+        session_id=record.session_id,
+        class_id=record.class_id,
+        class_title=class_title,
+        student_id=record.student_id,
+        student_name=record.student.name,
+        student_email=record.student.email,
+        joined_at=record.joined_at,
+        left_at=record.left_at,
+        status=record.status,
+        duration_minutes=record.duration_minutes,
+    )
+
+
+def get_session_attendance(db: Session, session_id: str) -> AttendanceSummary | None:
+    session = db.scalar(select(LiveSession).where(LiveSession.id == session_id))
+
+    if not session:
+        return None
+
+    classroom = get_class(db, session.class_id)
+
+    if not classroom:
+        return None
+
+    records = db.scalars(
+        select(Attendance)
+        .options(selectinload(Attendance.student))
+        .where(Attendance.session_id == session_id)
+        .order_by(Attendance.joined_at.asc())
+    ).all()
+
+    class_title = classroom.title
+    attendance_records = [build_attendance_record(r, class_title) for r in records]
+
+    return AttendanceSummary(
+        session_id=session_id,
+        class_id=session.class_id,
+        class_title=class_title,
+        started_at=session.started_at,
+        total_attended=len(attendance_records),
+        currently_present=sum(1 for r in attendance_records if r.status == "present"),
+        records=attendance_records,
+    )
+
+
+def get_class_attendance(db: Session, class_id: str) -> list[AttendanceSummary]:
+    sessions = db.scalars(
+        select(LiveSession)
+        .where(LiveSession.class_id == class_id)
+        .order_by(LiveSession.started_at.desc())
+    ).all()
+
+    summaries = []
+
+    for session in sessions:
+        summary = get_session_attendance(db, session.id)
+
+        if summary:
+            summaries.append(summary)
+
+    return summaries
+
+
+def get_teacher_attendance(db: Session, teacher: User) -> list[AttendanceSummary]:
+    """Return attendance summaries for all sessions run by this teacher."""
+    sessions = db.scalars(
+        select(LiveSession)
+        .where(LiveSession.teacher_id == teacher.id)
+        .order_by(LiveSession.started_at.desc())
+    ).all()
+
+    summaries = []
+
+    for session in sessions:
+        summary = get_session_attendance(db, session.id)
+
+        if summary:
+            summaries.append(summary)
+
+    return summaries

@@ -323,3 +323,27 @@ class BillingCustomerPortalRequest(BaseModel):
 
 class BillingCustomerPortalResponse(BaseModel):
     portal_url: str
+
+
+class AttendanceRecord(BaseModel):
+    id: int
+    session_id: str
+    class_id: str
+    class_title: str
+    student_id: str
+    student_name: str
+    student_email: str
+    joined_at: datetime
+    left_at: datetime | None = None
+    status: str
+    duration_minutes: int | None = None
+
+
+class AttendanceSummary(BaseModel):
+    session_id: str
+    class_id: str
+    class_title: str
+    started_at: datetime | None
+    total_attended: int
+    currently_present: int
+    records: list[AttendanceRecord]
