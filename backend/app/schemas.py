@@ -343,7 +343,23 @@ class AttendanceSummary(BaseModel):
     session_id: str
     class_id: str
     class_title: str
+    session_status: str
     started_at: datetime | None
     total_attended: int
     currently_present: int
     records: list[AttendanceRecord]
+
+
+class SessionSummaryResponse(BaseModel):
+    id: int
+    session_id: str
+    class_id: str
+    class_title: str
+    teacher_name: str
+    summary_text: str
+    key_points: list[str]
+    action_items: list[str]
+    generated_at: datetime
+    source_type: str
+    total_attended: int
+    started_at: datetime | None

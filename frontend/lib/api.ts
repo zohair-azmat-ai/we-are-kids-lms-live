@@ -285,10 +285,26 @@ export type AttendanceSummary = {
   session_id: string;
   class_id: string;
   class_title: string;
+  session_status: string;
   started_at: string | null;
   total_attended: number;
   currently_present: number;
   records: AttendanceRecord[];
+};
+
+export type SessionSummaryResponse = {
+  id: number;
+  session_id: string;
+  class_id: string;
+  class_title: string;
+  teacher_name: string;
+  summary_text: string;
+  key_points: string[];
+  action_items: string[];
+  generated_at: string;
+  source_type: "ai" | "fallback";
+  total_attended: number;
+  started_at: string | null;
 };
 
 async function parseResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
@@ -918,5 +934,35 @@ export async function fetchClassAttendance(
     `/api/v1/attendance/class/${classId}`,
     { cache: "no-store" },
     "Class attendance request failed.",
+  );
+}
+
+export async function fetchSessionSummary(
+  sessionId: string,
+): Promise<SessionSummaryResponse> {
+  return requestJson<SessionSummaryResponse>(
+    `/api/v1/summaries/session/${sessionId}`,
+    { cache: "no-store" },
+    "Session summary request failed.",
+  );
+}
+
+export async function fetchClassSummaries(
+  classId: string,
+): Promise<SessionSummaryResponse[]> {
+  return requestJson<SessionSummaryResponse[]>(
+    `/api/v1/summaries/class/${classId}`,
+    { cache: "no-store" },
+    "Class summaries request failed.",
+  );
+}
+
+export async function generateSessionSummary(
+  sessionId: string,
+): Promise<SessionSummaryResponse> {
+  return requestJson<SessionSummaryResponse>(
+    `/api/v1/summaries/generate/${sessionId}`,
+    { method: "POST" },
+    "Summary generation request failed.",
   );
 }

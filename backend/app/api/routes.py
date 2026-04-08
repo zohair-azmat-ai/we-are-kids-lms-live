@@ -3,7 +3,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import stripe
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from livekit.api import AccessToken, VideoGrants
 from sqlalchemy import select
@@ -31,6 +31,7 @@ from app.schemas import (
     AIInsightsResponse,
     AttendanceRecord,
     AttendanceSummary,
+    SessionSummaryResponse,
     AuthLoginRequest,
     AuthLoginResponse,
     AuthRegisterRequest,
@@ -79,19 +80,24 @@ from app.services import (
     cleanup_expired_recordings,
     close_attendance_record,
     delete_recording_file,
+    generate_and_save_summary,
     get_active_session_for_class,
     get_billing_account_by_customer_id,
     get_billing_account_by_subscription_id,
     get_class,
     get_class_attendance,
+    get_class_summaries_db,
+    get_latest_session_for_class,
     get_live_or_scheduled_class,
     get_or_create_billing_account,
     get_or_create_live_session,
     get_session_attendance,
+    get_session_summary_db,
     get_student,
     get_teacher,
     get_teacher_attendance,
     get_teacher_by_email,
+    trigger_session_summary_background,
     get_user_by_email_and_role,
     get_user_by_name_and_role,
     is_student_enrolled_in_class,
@@ -453,6 +459,7 @@ def start_class_session(
 def end_teacher_class_session(
     class_id: str,
     payload: EndClassRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
 ) -> SuccessResponse:
     if current_user.role != "teacher":
@@ -476,6 +483,8 @@ def end_teacher_class_session(
 
     if not session or session.status != "ended":
         raise HTTPException(status_code=404, detail="Live session not found.")
+
+    background_tasks.add_task(trigger_session_summary_background, class_id)
 
     return SuccessResponse(success=True, message="Live session ended successfully.")
 
@@ -1291,6 +1300,7 @@ def get_admin_analytics(
 @api_router.post("/admin/live-sessions/{class_id}/end", response_model=SuccessResponse)
 def end_admin_live_session(
     class_id: str,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
 ) -> SuccessResponse:
     if current_user.role != "admin":
@@ -1300,6 +1310,8 @@ def end_admin_live_session(
 
     if not session or session.status != "ended":
         raise HTTPException(status_code=404, detail="Live session not found.")
+
+    background_tasks.add_task(trigger_session_summary_background, class_id)
 
     return SuccessResponse(success=True, message="Live session ended successfully.")
 
@@ -1363,3 +1375,49 @@ def get_class_attendance_route(
 
     with SessionLocal() as db:
         return get_class_attendance(db, class_id)
+
+
+@api_router.get("/summaries/session/{session_id}", response_model=SessionSummaryResponse)
+def get_session_summary_route(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+) -> SessionSummaryResponse:
+    if current_user.role not in {"teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="Teacher or admin access required.")
+
+    with SessionLocal() as db:
+        result = get_session_summary_db(db, session_id)
+
+        if not result:
+            raise HTTPException(status_code=404, detail="No summary found for this session.")
+
+        return result
+
+
+@api_router.get("/summaries/class/{class_id}", response_model=list[SessionSummaryResponse])
+def get_class_summaries_route(
+    class_id: str,
+    current_user: User = Depends(get_current_user),
+) -> list[SessionSummaryResponse]:
+    if current_user.role not in {"teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="Teacher or admin access required.")
+
+    with SessionLocal() as db:
+        return get_class_summaries_db(db, class_id)
+
+
+@api_router.post("/summaries/generate/{session_id}", response_model=SessionSummaryResponse)
+def generate_session_summary_route(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+) -> SessionSummaryResponse:
+    if current_user.role not in {"teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="Teacher or admin access required.")
+
+    with SessionLocal() as db:
+        result = generate_and_save_summary(db, session_id)
+
+        if not result:
+            raise HTTPException(status_code=404, detail="Session not found or cannot generate summary.")
+
+        return result

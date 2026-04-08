@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import OPENAI_API_KEY, OPENAI_MODEL
 from app.models import Classroom, Enrollment, LiveSession, Recording, User
-from app.schemas import AIInsightItem, AIInsightsResponse, AIChatResponse
+from app.schemas import AIInsightItem, AIInsightsResponse, AIChatResponse, SessionSummaryResponse
 from app.services import (
     build_billing_usage_summary,
     get_or_create_billing_account,
@@ -398,6 +398,131 @@ def _fallback_answer(question: str, snapshot: dict[str, Any], insights: AIInsigh
         f"Here is the latest operational summary from your real LMS data: {top_insights}",
         suggestions,
     )
+
+
+def _fallback_session_summary(
+    class_title: str,
+    teacher_name: str,
+    total_attended: int,
+    duration_minutes: int,
+    started_at: str,
+) -> dict[str, Any]:
+    """Structured fallback summary when OpenAI is not available."""
+    attended_line = (
+        f"{total_attended} student(s) attended" if total_attended > 0 else "No student attendance recorded"
+    )
+    duration_line = f"Session ran for approximately {duration_minutes} minute(s)" if duration_minutes > 0 else "Session duration unknown"
+    return {
+        "summary_text": (
+            f"{teacher_name} completed a live session for {class_title} on {started_at}. "
+            f"{attended_line}. {duration_line}."
+        ),
+        "key_points": [
+            f"Class: {class_title}",
+            f"Teacher: {teacher_name}",
+            duration_line,
+            attended_line,
+        ],
+        "action_items": [
+            "Review any uploaded recording from this session",
+            "Follow up with students who were absent",
+            "Check attendance panel for individual join/leave times",
+        ],
+        "source_type": "fallback",
+    }
+
+
+def _call_openai_summary(
+    class_title: str,
+    teacher_name: str,
+    total_attended: int,
+    duration_minutes: int,
+    started_at: str,
+) -> dict[str, Any]:
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OpenAI API key is missing.")
+
+    prompt = (
+        f"Write a concise post-session summary for a live classroom session.\n\n"
+        f"Class: {class_title}\n"
+        f"Teacher: {teacher_name}\n"
+        f"Date/Time: {started_at}\n"
+        f"Duration: {duration_minutes} minute(s)\n"
+        f"Students who attended: {total_attended}\n\n"
+        "Return a JSON object with exactly these fields:\n"
+        '- "summary_text": a 2-3 sentence overview\n'
+        '- "key_points": an array of 3-4 short bullet strings\n'
+        '- "action_items": an array of 2-3 follow-up action strings\n\n'
+        "Respond only with valid JSON. No markdown, no code blocks."
+    )
+
+    body = {
+        "model": OPENAI_MODEL,
+        "input": [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": prompt}],
+            }
+        ],
+    }
+
+    req = request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with request.urlopen(req, timeout=30) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+    except (error.HTTPError, error.URLError) as exc:
+        raise RuntimeError("OpenAI summary request failed.") from exc
+
+    raw_text = _extract_output_text(response_payload)
+
+    if not raw_text:
+        raise RuntimeError("OpenAI returned empty summary.")
+
+    try:
+        parsed = json.loads(raw_text)
+        return {
+            "summary_text": str(parsed.get("summary_text", "")),
+            "key_points": [str(p) for p in parsed.get("key_points", [])],
+            "action_items": [str(a) for a in parsed.get("action_items", [])],
+            "source_type": "ai",
+        }
+    except (json.JSONDecodeError, TypeError):
+        raise RuntimeError("OpenAI returned non-JSON summary.")
+
+
+def generate_session_summary(
+    class_title: str,
+    teacher_name: str,
+    total_attended: int,
+    duration_minutes: int,
+    started_at: str,
+) -> dict[str, Any]:
+    """Generate a session summary using OpenAI if available, otherwise use fallback."""
+    try:
+        return _call_openai_summary(
+            class_title=class_title,
+            teacher_name=teacher_name,
+            total_attended=total_attended,
+            duration_minutes=duration_minutes,
+            started_at=started_at,
+        )
+    except RuntimeError:
+        return _fallback_session_summary(
+            class_title=class_title,
+            teacher_name=teacher_name,
+            total_attended=total_attended,
+            duration_minutes=duration_minutes,
+            started_at=started_at,
+        )
 
 
 def answer_ai_chat(db: Session, current_user: User, question: str) -> AIChatResponse:

@@ -8,10 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import SessionLocal
-from app.models import Attendance, BillingAccount, Classroom, Enrollment, LiveSession, Recording, User
+from app.models import Attendance, BillingAccount, Classroom, Enrollment, LiveSession, Recording, SessionSummary, User
 from app.schemas import (
     AttendanceRecord,
     AttendanceSummary,
+    SessionSummaryResponse,
     BillingPlan,
     BillingPlanFeatures,
     BillingPlanInfo,
@@ -909,6 +910,7 @@ def get_session_attendance(db: Session, session_id: str) -> AttendanceSummary | 
         session_id=session_id,
         class_id=session.class_id,
         class_title=class_title,
+        session_status=session.status,
         started_at=session.started_at,
         total_attended=len(attendance_records),
         currently_present=sum(1 for r in attendance_records if r.status == "present"),
@@ -951,3 +953,172 @@ def get_teacher_attendance(db: Session, teacher: User) -> list[AttendanceSummary
             summaries.append(summary)
 
     return summaries
+
+
+# ---------------------------------------------------------------------------
+# Session summary service functions
+# ---------------------------------------------------------------------------
+
+
+def build_session_summary_response(
+    record: SessionSummary,
+    class_title: str,
+    teacher_name: str,
+    total_attended: int,
+    started_at: object,
+) -> SessionSummaryResponse:
+    import json as _json
+
+    try:
+        key_points = _json.loads(record.key_points)
+    except Exception:
+        key_points = [record.key_points] if record.key_points else []
+
+    try:
+        action_items = _json.loads(record.action_items)
+    except Exception:
+        action_items = [record.action_items] if record.action_items else []
+
+    return SessionSummaryResponse(
+        id=record.id,
+        session_id=record.session_id,
+        class_id=record.class_id,
+        class_title=class_title,
+        teacher_name=teacher_name,
+        summary_text=record.summary_text,
+        key_points=key_points,
+        action_items=action_items,
+        generated_at=record.generated_at,
+        source_type=record.source_type,
+        total_attended=total_attended,
+        started_at=started_at,
+    )
+
+
+def get_session_summary_db(db: Session, session_id: str) -> SessionSummaryResponse | None:
+    record = db.scalar(
+        select(SessionSummary).where(SessionSummary.session_id == session_id)
+    )
+
+    if not record:
+        return None
+
+    session = db.scalar(select(LiveSession).where(LiveSession.id == session_id))
+    classroom = get_class(db, record.class_id) if record else None
+
+    if not session or not classroom:
+        return None
+
+    teacher = db.scalar(select(User).where(User.id == record.teacher_id))
+    teacher_name = teacher.name if teacher else "Teacher"
+    attendance_count = db.scalar(
+        select(Attendance).where(Attendance.session_id == session_id).with_only_columns(
+            __import__("sqlalchemy", fromlist=["func"]).func.count()
+        )
+    ) or 0
+
+    return build_session_summary_response(
+        record,
+        class_title=classroom.title,
+        teacher_name=teacher_name,
+        total_attended=attendance_count,
+        started_at=session.started_at,
+    )
+
+
+def get_class_summaries_db(db: Session, class_id: str) -> list[SessionSummaryResponse]:
+    records = db.scalars(
+        select(SessionSummary)
+        .where(SessionSummary.class_id == class_id)
+        .order_by(SessionSummary.generated_at.desc())
+    ).all()
+
+    results = []
+
+    for record in records:
+        response = get_session_summary_db(db, record.session_id)
+        if response:
+            results.append(response)
+
+    return results
+
+
+def generate_and_save_summary(db: Session, session_id: str) -> SessionSummaryResponse | None:
+    """Generate and persist a summary for the given session. Safe to call multiple times."""
+    import json as _json
+    from app.ai_service import generate_session_summary as ai_generate
+
+    session = db.scalar(select(LiveSession).where(LiveSession.id == session_id))
+
+    if not session:
+        return None
+
+    classroom = get_class(db, session.class_id)
+
+    if not classroom or not classroom.teacher:
+        return None
+
+    teacher = classroom.teacher
+    total_attended = db.scalar(
+        select(Attendance)
+        .where(Attendance.session_id == session_id)
+        .with_only_columns(__import__("sqlalchemy", fromlist=["func"]).func.count())
+    ) or 0
+
+    started_at = session.started_at
+    ended_at = session.ended_at or utc_now()
+    duration_minutes = max(0, round((ended_at - started_at).total_seconds() / 60)) if started_at else 0
+    started_at_str = started_at.strftime("%A, %d %B %Y at %H:%M UTC") if started_at else "Unknown"
+
+    result = ai_generate(
+        class_title=classroom.title,
+        teacher_name=teacher.name,
+        total_attended=total_attended,
+        duration_minutes=duration_minutes,
+        started_at=started_at_str,
+    )
+
+    existing = db.scalar(select(SessionSummary).where(SessionSummary.session_id == session_id))
+
+    if existing:
+        existing.summary_text = result["summary_text"]
+        existing.key_points = _json.dumps(result["key_points"])
+        existing.action_items = _json.dumps(result["action_items"])
+        existing.source_type = result["source_type"]
+        existing.generated_at = utc_now()
+        db.commit()
+        db.refresh(existing)
+        record = existing
+    else:
+        record = SessionSummary(
+            session_id=session_id,
+            class_id=session.class_id,
+            teacher_id=teacher.id,
+            summary_text=result["summary_text"],
+            key_points=_json.dumps(result["key_points"]),
+            action_items=_json.dumps(result["action_items"]),
+            generated_at=utc_now(),
+            source_type=result["source_type"],
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+
+    return build_session_summary_response(
+        record,
+        class_title=classroom.title,
+        teacher_name=teacher.name,
+        total_attended=total_attended,
+        started_at=started_at,
+    )
+
+
+def trigger_session_summary_background(class_id: str) -> None:
+    """Background task — generates summary after session ends. Swallows all errors."""
+    try:
+        with SessionLocal() as db:
+            session = get_latest_session_for_class(db, class_id)
+            if session and session.status == "ended":
+                generate_and_save_summary(db, session.id)
+    except Exception:
+        pass

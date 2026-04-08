@@ -83,6 +83,11 @@ class User(Base):
         cascade="all, delete-orphan",
         foreign_keys="Attendance.student_id",
     )
+    session_summaries: Mapped[list["SessionSummary"]] = relationship(
+        back_populates="teacher",
+        cascade="all, delete-orphan",
+        foreign_keys="SessionSummary.teacher_id",
+    )
 
 
 class Classroom(Base):
@@ -115,6 +120,10 @@ class Classroom(Base):
         back_populates="classroom",
         cascade="all, delete-orphan",
     )
+    summaries: Mapped[list["SessionSummary"]] = relationship(
+        back_populates="classroom",
+        cascade="all, delete-orphan",
+    )
 
 
 class Enrollment(Base):
@@ -143,6 +152,11 @@ class LiveSession(Base):
     teacher: Mapped[User] = relationship(back_populates="live_sessions")
     attendance_records: Mapped[list["Attendance"]] = relationship(
         back_populates="session",
+        cascade="all, delete-orphan",
+    )
+    summary: Mapped["SessionSummary | None"] = relationship(
+        back_populates="session",
+        uselist=False,
         cascade="all, delete-orphan",
     )
 
@@ -184,4 +198,34 @@ class Attendance(Base):
     student: Mapped[User] = relationship(
         back_populates="attendance_records",
         foreign_keys=[student_id],
+    )
+
+
+class SessionSummary(Base):
+    __tablename__ = "session_summaries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("live_sessions.id"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    class_id: Mapped[str] = mapped_column(ForeignKey("classes.id"), nullable=False, index=True)
+    teacher_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    summary_text: Mapped[str] = mapped_column(Text, nullable=False)
+    key_points: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    action_items: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="fallback")
+
+    session: Mapped[LiveSession] = relationship(back_populates="summary")
+    classroom: Mapped[Classroom] = relationship(back_populates="summaries")
+    teacher: Mapped[User] = relationship(
+        back_populates="session_summaries",
+        foreign_keys=[teacher_id],
     )
