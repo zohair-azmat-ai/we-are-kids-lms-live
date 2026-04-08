@@ -1,11 +1,12 @@
 <div align="center">
 
-<img src="./frontend/public/images/logo.png" alt="We Are Kids Nursery" width="120" />
+<img src="./frontend/public/images/logo.png" alt="We Are Kids Nursery" width="100" />
+
+<br />
 
 # We Are Kids Nursery
-### AI-Powered LMS · Live Video Classrooms · SaaS Billing
 
-**From demo to real AI-powered SaaS platform.**
+### AI-powered LMS with real-time classrooms, SaaS billing, and intelligent insights.
 
 <br />
 
@@ -13,176 +14,201 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
-[![Neon Postgres](https://img.shields.io/badge/Neon_Postgres-00E5A0?style=for-the-badge&logo=postgresql&logoColor=white)](https://neon.tech)
-[![JWT Auth](https://img.shields.io/badge/JWT_Auth-F59E0B?style=for-the-badge&logo=jsonwebtokens&logoColor=white)](https://jwt.io)
 [![LiveKit](https://img.shields.io/badge/LiveKit-E11D48?style=for-the-badge&logo=webrtc&logoColor=white)](https://livekit.io)
 [![Stripe](https://img.shields.io/badge/Stripe-635BFF?style=for-the-badge&logo=stripe&logoColor=white)](https://stripe.com)
 [![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=for-the-badge&logo=openai&logoColor=white)](https://openai.com)
+[![Neon](https://img.shields.io/badge/Neon_Postgres-00E5A0?style=for-the-badge&logo=postgresql&logoColor=white)](https://neon.tech)
 [![Vercel](https://img.shields.io/badge/Vercel-111111?style=for-the-badge&logo=vercel&logoColor=white)](https://vercel.com)
 [![Hugging Face](https://img.shields.io/badge/Hugging_Face-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black)](https://huggingface.co/spaces)
 
 <br />
 
-![Platform Banner](./frontend/public/images/hero.png)
+![Platform Hero](./frontend/public/images/hero.png)
+
+<br />
+
+> **From demo to real AI-powered SaaS platform.**
 
 </div>
 
----
-
-## 🚀 Live Classroom Experience
-
-> The most production-ready feature of this platform — real-time video classrooms powered by LiveKit WebRTC.
-
-**How it works in 4 steps:**
-
-| Step | What Happens |
-|:---:|:---|
-| 1 | Teacher opens their class and clicks **Start Live Session** |
-| 2 | LiveKit creates a secure room — students see it go live instantly |
-| 3 | All participants join a **real-time video grid** — audio, video, multi-tile |
-| 4 | Session ends → recording uploaded → available for 5 days |
-
-This is not a mock or embedded iframe. It is a full WebRTC classroom built on production-grade LiveKit infrastructure.
-
-![Live Classroom](./frontend/public/images/live-class.png)
+<br />
 
 ---
 
 ## 💡 Why This Project Stands Out
 
-This is not a tutorial project. Every feature below is implemented end-to-end.
+> Every feature is implemented end-to-end. No mocks. No placeholders. No tutorials.
 
-|  | Feature | What makes it real |
-|:---:|:---|:---|
-| 🎥 | **Real-time video classrooms** | LiveKit WebRTC SDK — multi-participant, production-grade |
-| 💳 | **Full SaaS billing** | Stripe subscriptions with tiered plan enforcement per route |
-| 🤖 | **AI assistant + insights** | OpenAI-powered chat and classroom recommendations |
-| 🔐 | **JWT authentication** | Token-based auth with bcrypt, role-protected routes |
-| 🐘 | **Cloud database** | Neon Postgres via SQLAlchemy — persistent, not in-memory |
-| 🚀 | **Deployed to production** | Vercel (frontend) + Hugging Face Spaces (backend) |
+| | What's Real |
+|:---:|:---|
+| 🎥 | **Live WebRTC classrooms** — multi-participant video via LiveKit, not an iframe |
+| 💳 | **SaaS billing** — Stripe subscriptions with plan limits enforced at the API layer |
+| 🤖 | **AI assistant + insights** — OpenAI-powered chat and classroom recommendations |
+| 🔐 | **JWT auth** — bcrypt passwords, role-protected routes, token refresh |
+| 🐘 | **Cloud database** — Neon Postgres via SQLAlchemy, persistent across deploys |
+| 🚀 | **Production deployed** — Vercel frontend + Hugging Face Spaces backend (Docker) |
 
 ---
 
-## Features
+## 🎥 Live Classroom Experience
 
-### 🤖 AI Features
+<div align="center">
 
-- **AI Assistant Chat** — context-aware chat for students and teachers
-- **AI Insights Panel** — smart recommendations from class activity
-- **Graceful fallback** — works with or without an OpenAI key
+![Live Classroom](./frontend/public/images/live-class.png)
+
+</div>
+
+<br />
+
+**Real-time video classrooms powered by LiveKit WebRTC — not a demo.**
+
+| Step | |
+|:---:|:---|
+| **1** | Teacher clicks **Start Live Session** — a LiveKit room is created instantly |
+| **2** | Students see the class go live and join with a single click |
+| **3** | All participants appear in a real-time video grid |
+| **4** | Session ends → recording uploaded → available for 5 days |
+
+---
+
+## ⚡ Features
+
+<br />
+
+### 🤖 AI
+
+- Context-aware **AI assistant chat** for students and teachers
+- **AI insights panel** — recommendations from class activity
+- Graceful fallback if no OpenAI key is set
+
+<br />
 
 ### 🎥 Live Classes
 
 - Teacher-initiated LiveKit video rooms
-- Student join via secure session token
-- Multi-participant video grid in the classroom UI
-- Post-session recording upload with 5-day auto-expiry
+- Secure student join via session token
+- Multi-participant real-time video grid
+- Post-session recording with 5-day auto-expiry
+
+<br />
 
 ### 🏫 LMS Core
 
-- Role-based dashboards: Admin · Teacher · Student
-- Class creation, scheduling, and management
+- Role dashboards: **Admin · Teacher · Student**
+- Class scheduling and management
 - Recording library: upload · playback · rename · delete
-- Mobile-responsive, nursery-branded design
+
+<br />
 
 ### 💳 SaaS Billing
 
 - Stripe subscription billing
-- Tiered plans with usage limits enforced per API route
-- Admin billing management dashboard
-- Pricing page with plan comparison
+- Tiered plans with **API-layer usage enforcement**
+- Admin billing dashboard + pricing page
+
+<br />
 
 ### 📊 Analytics
 
-- Bar chart dashboards per user role
+- Bar chart dashboards per role
 - Session and recording usage tracking
 - System status monitoring
-- Role-specific metrics
 
-### 🛡️ Admin Controls
+<br />
+
+### 🛡️ Admin
 
 - Full user management (teachers + students)
 - Live session monitoring
-- Recording library oversight
-- Billing tier management
+- Billing tier control
 
 ---
 
 ## 📸 Product Screens
 
-> Screenshots from the live platform.
+<br />
 
-### Landing Page
+### 🏠 Landing Page
+
 ![Landing Page](./frontend/public/images/hero.png)
 
-### Live Classroom
+<br />
+
+### 🎥 Live Classroom
+
 ![Live Classroom](./frontend/public/images/live-class.png)
 
-### Admin Dashboard
-<!-- frontend/public/images/screenshots/admin-dashboard.png -->
-*Full management panel — users, classes, sessions, recordings, billing.*
+<br />
 
-### Teacher Dashboard
-<!-- frontend/public/images/screenshots/teacher-dashboard.png -->
+### 🛡️ Admin Dashboard
+*Full management — users, classes, sessions, recordings, billing.*
+<!-- Add: frontend/public/images/screenshots/admin-dashboard.png -->
+
+<br />
+
+### 👩‍🏫 Teacher Dashboard
 *Live class controls, recording management, AI insights.*
+<!-- Add: frontend/public/images/screenshots/teacher-dashboard.png -->
 
-### Student Dashboard
-<!-- frontend/public/images/screenshots/student-dashboard.png -->
+<br />
+
+### 👧 Student Dashboard
 *Class join, recordings, AI assistant chat.*
+<!-- Add: frontend/public/images/screenshots/student-dashboard.png -->
 
-### Billing & Pricing
-<!-- frontend/public/images/screenshots/billing.png -->
-*Stripe-powered plan tiers with live usage enforcement.*
+<br />
 
-### AI Assistant
-<!-- frontend/public/images/screenshots/ai-assistant.png -->
+### 🤖 AI Assistant
 *Contextual AI chat and insight recommendations.*
+<!-- Add: frontend/public/images/screenshots/ai-assistant.png -->
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
 ```mermaid
-flowchart TD
+flowchart LR
     subgraph Users
         A["👤 Admin"]
         T["👩‍🏫 Teacher"]
         S["👧 Student"]
     end
 
-    subgraph Frontend["Next.js 14 · Vercel"]
-        UI["App UI + Routing"]
-        AUTH_UI["Login / JWT State"]
+    subgraph FE["Next.js 14 · Vercel"]
+        LOGIN["Login & JWT"]
+        DASH["Dashboards"]
+        LIVE["Live Classroom UI"]
+        AI_UI["AI Assistant UI"]
     end
 
-    subgraph Backend["FastAPI · Hugging Face Spaces"]
-        API["REST API"]
+    subgraph BE["FastAPI · Hugging Face Spaces"]
         JWT["JWT Auth"]
-        LK["LiveKit Service"]
-        STR["Stripe Service"]
-        AI["AI Service"]
+        API["REST API"]
+        LK_SVC["LiveKit Service"]
+        STR_SVC["Stripe Service"]
+        AI_SVC["AI Service"]
     end
 
-    subgraph Data
+    subgraph Infra
         DB[("🐘 Neon Postgres")]
-        LK_IO[("🎥 LiveKit.io")]
-        STRIPE_IO[("💳 Stripe")]
-        OPENAI_IO[("🤖 OpenAI")]
+        LK[("🎥 LiveKit.io")]
+        STRIPE[("💳 Stripe")]
+        OPENAI[("🤖 OpenAI")]
     end
 
-    A & T & S --> AUTH_UI --> JWT
-    JWT --> UI --> API
+    A & T & S --> LOGIN --> JWT --> API
     API --> DB
-    LK --> LK_IO
-    STR --> STRIPE_IO
-    AI --> OPENAI_IO
+    DASH --> API
+    LIVE --> LK_SVC --> LK
+    AI_UI --> AI_SVC --> OPENAI
+    DASH --> STR_SVC --> STRIPE
 ```
 
 ---
 
-## Demo
+## 🧪 Demo
 
-### Credentials
+### Try It Now
 
 | Role | Email | Password |
 |:---|:---|:---|
@@ -190,16 +216,16 @@ flowchart TD
 | Teacher | `teacher1@wearekids.com` | `123456` |
 | Student | `student1@wearekids.com` | `123456` |
 
-### Suggested Walkthrough
+### Walkthrough
 
-1. **Admin** — explore user management, billing, and session oversight
-2. **Teacher** — start a live class, check AI insights, manage recordings
-3. **Student (second tab)** — join the live class, use AI assistant
-4. **Billing** — observe plan enforcement when usage limits are hit
+1. **Admin** → explore user management, billing, and session oversight
+2. **Teacher** → start a live class, check AI insights, manage recordings
+3. **Student** *(open second tab)* → join the live class, use AI assistant
+4. **Billing** → watch plan enforcement trigger at usage limits
 
 ---
 
-## Tech Stack
+## 🛠️ Tech Stack
 
 | Layer | Technology |
 |:---|:---|
@@ -214,7 +240,7 @@ flowchart TD
 
 ---
 
-## Local Setup
+## 🚀 Local Setup
 
 ```bash
 # Backend
@@ -230,8 +256,6 @@ cp .env.example .env.local
 npm install && npm run dev
 ```
 
-### Environment Variables
-
 **Frontend** `.env.local`
 ```env
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
@@ -240,55 +264,60 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 **Backend** `.env`
 ```env
 DATABASE_URL=postgresql+psycopg2://user:password@your-neon-host/dbname
-LIVEKIT_API_KEY=your_livekit_api_key
-LIVEKIT_API_SECRET=your_livekit_api_secret
-LIVEKIT_URL=wss://your-livekit-server.livekit.cloud
-STRIPE_SECRET_KEY=your_stripe_secret_key
-OPENAI_API_KEY=your_openai_api_key
-SECRET_KEY=your_jwt_secret_key
+LIVEKIT_API_KEY=your_key
+LIVEKIT_API_SECRET=your_secret
+LIVEKIT_URL=wss://your-server.livekit.cloud
+STRIPE_SECRET_KEY=your_stripe_key
+OPENAI_API_KEY=your_openai_key
+SECRET_KEY=your_jwt_secret
 CORS_ORIGINS=http://localhost:3000
 ```
 
 ---
 
-## Deployment
+## ☁️ Deployment
 
 **Frontend → Vercel**
 1. Import repo → set root to `frontend/`
-2. Add `NEXT_PUBLIC_API_BASE_URL` → deploy
+2. Set `NEXT_PUBLIC_API_BASE_URL` → deploy
 
 **Backend → Hugging Face Spaces**
-1. New Space (Docker SDK) → upload `hf-space-backend/`
+1. New Space (Docker) → upload `hf-space-backend/`
 2. Set all env vars in Space settings
-3. Copy Space URL → paste into Vercel as `NEXT_PUBLIC_API_BASE_URL`
+3. Copy Space URL → use as `NEXT_PUBLIC_API_BASE_URL`
 
 ---
 
-## Roadmap
+## 🗺️ Roadmap
 
 | Priority | Feature |
 |:---|:---|
-| High | Attendance tracking per live session |
-| High | Cloud recording storage (S3 / Cloudflare R2) |
-| Medium | Parent portal with progress reports |
-| Medium | Real-time notifications (email + in-app) |
-| Medium | AI auto-summaries for completed sessions |
-| Low | Mobile app (React Native) |
-| Low | Multi-tenant school isolation |
+| 🔴 High | Attendance tracking per live session |
+| 🔴 High | Cloud recording storage (S3 / R2) |
+| 🟡 Medium | Parent portal with progress reports |
+| 🟡 Medium | Real-time notifications |
+| 🟡 Medium | AI auto-summaries for sessions |
+| 🟢 Low | Mobile app (React Native) |
+| 🟢 Low | Multi-tenant school isolation |
 
 ---
+
+<br />
 
 <div align="center">
 
----
+## 🚀 Ready to Explore?
 
-## 🚀 Built by
+👉 **Clone the repo** and run locally with the setup above
 
-**Zohair Azmat**
-Full Stack Developer · AI Systems Builder
+👉 **Built by [Zohair Azmat](https://github.com/zohair-azmat-ai)** — Full Stack Developer · AI Systems Builder
+
+<br />
 
 *This project represents a transition from learning to building real AI-powered products.*
 
-[![GitHub](https://img.shields.io/badge/GitHub-zohair--azmat--ai-181717?style=flat-square&logo=github&logoColor=white)](https://github.com/zohair-azmat-ai)
+<br />
+
+[![GitHub](https://img.shields.io/badge/GitHub-zohair--azmat--ai-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/zohair-azmat-ai)
 
 </div>
