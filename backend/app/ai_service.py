@@ -121,8 +121,8 @@ def build_ai_snapshot(db: Session, current_user: User) -> dict[str, Any]:
         recording for recording in recordings if recording.created_at >= recent_recording_cutoff
     ]
     attendance_query = select(Attendance).where(Attendance.joined_at >= recent_attendance_cutoff)
-    if classes:
-        attendance_query = attendance_query.where(Attendance.class_id.in_([classroom.id for classroom in classes]))
+    if classrooms:
+        attendance_query = attendance_query.where(Attendance.class_id.in_([classroom.id for classroom in classrooms]))
     else:
         attendance_query = attendance_query.where(Attendance.class_id == "__none__")
     recent_attendance = db.scalars(attendance_query).all()
@@ -703,5 +703,9 @@ def answer_ai_chat(db: Session, current_user: User, question: str) -> AIChatResp
 
 
 def get_ai_insights(db: Session, current_user: User) -> AIInsightsResponse:
-    snapshot = build_ai_snapshot(db, current_user)
-    return build_ai_insights_from_snapshot(snapshot)
+    try:
+        snapshot = build_ai_snapshot(db, current_user)
+        return build_ai_insights_from_snapshot(snapshot)
+    except Exception as exc:
+        logger.error("AI insights generation failed for %s: %s", current_user.email, exc, exc_info=True)
+        return _build_default_ai_insights(current_user.role)

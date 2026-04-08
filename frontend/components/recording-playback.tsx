@@ -15,6 +15,18 @@ type RecordingPlaybackProps = {
   subtitle: string;
 };
 
+function resolvePlayUrl(recording: RecordingItem): string {
+  if (recording.cloud_url) return recording.cloud_url;
+  if (recording.file_url) {
+    try {
+      return getAssetUrl(recording.file_url);
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
 export function RecordingPlayback({
   allowedRole,
   title,
@@ -25,6 +37,7 @@ export function RecordingPlayback({
   const [recording, setRecording] = useState<RecordingItem | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
 
   usePageTitle(recording ? recording.title : title);
 
@@ -63,6 +76,22 @@ export function RecordingPlayback({
     void loadRecording();
   }, [params.recordingId, allowedRole, user]);
 
+  async function copyShareLink() {
+    if (!recording) return;
+    const url = resolvePlayUrl(recording);
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard not available
+    }
+  }
+
+  const playUrl = recording ? resolvePlayUrl(recording) : "";
+  const hasVideo = Boolean(playUrl);
+
   return (
     <DashboardShell
       allowedRole={allowedRole}
@@ -83,13 +112,26 @@ export function RecordingPlayback({
       ) : (
         <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
           <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
-            <div className="overflow-hidden rounded-[2rem] bg-slate-900">
-              <video
-                controls
-                className="h-full w-full"
-                src={getAssetUrl(recording.file_url)}
-              />
-            </div>
+            {hasVideo ? (
+              <div className="overflow-hidden rounded-[2rem] bg-slate-900">
+                <video
+                  controls
+                  autoPlay
+                  className="h-full w-full"
+                  src={playUrl}
+                  style={{ maxHeight: "480px" }}
+                />
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center gap-3 rounded-[2rem] bg-slate-100 px-8 py-16 text-center">
+                <p className="text-base font-semibold text-slate-600">
+                  No video file available
+                </p>
+                <p className="text-sm text-slate-400">
+                  This recording was saved as metadata only. The video file was not uploaded.
+                </p>
+              </div>
+            )}
           </section>
 
           <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
@@ -100,19 +142,46 @@ export function RecordingPlayback({
               {recording.title}
             </h2>
             <div className="mt-6 space-y-4 text-slate-700">
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4">
-                Teacher: {recording.teacher}
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm">
+                <span className="text-slate-400">Teacher</span>
+                <p className="mt-0.5 font-medium text-slate-700">{recording.teacher}</p>
               </div>
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4">
-                Class ID: {recording.class_id}
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm">
+                <span className="text-slate-400">Class</span>
+                <p className="mt-0.5 font-medium text-slate-700">{recording.class_id}</p>
               </div>
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4">
-                Created: {new Date(recording.created_at).toLocaleString()}
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm">
+                <span className="text-slate-400">Recorded</span>
+                <p className="mt-0.5 font-medium text-slate-700">
+                  {new Date(recording.created_at).toLocaleString()}
+                </p>
               </div>
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4">
-                Available until: {new Date(recording.expires_at).toLocaleDateString()}
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm">
+                <span className="text-slate-400">Available until</span>
+                <p className="mt-0.5 font-medium text-slate-700">
+                  {new Date(recording.expires_at).toLocaleDateString()}
+                </p>
               </div>
+              {recording.cloud_url ? (
+                <div className="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm">
+                  <span className="font-semibold text-sky-700">Stored in cloud</span>
+                </div>
+              ) : null}
             </div>
+
+            {hasVideo ? (
+              <button
+                type="button"
+                onClick={() => void copyShareLink()}
+                className={`mt-6 w-full rounded-full py-3 text-sm font-semibold transition active:scale-95 ${
+                  copied
+                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                    : "bg-blue-600 text-white shadow-sm shadow-blue-100 hover:bg-blue-700"
+                }`}
+              >
+                {copied ? "Link copied!" : "Copy Share Link"}
+              </button>
+            ) : null}
           </section>
         </div>
       )}

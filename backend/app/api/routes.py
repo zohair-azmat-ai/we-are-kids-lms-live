@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.ai_service import answer_ai_chat, get_ai_insights, get_default_ai_insights
+from app.storage import upload_recording_to_cloud, delete_recording_from_cloud
 from app.auth import authenticate_user, create_access_token, get_current_user, hash_password
 from app.config import (
     LIVEKIT_API_KEY,
@@ -933,29 +934,37 @@ async def upload_recording(
         if classroom.teacher_id != current_user.id:
             raise HTTPException(status_code=403, detail="Teacher access denied for this class.")
 
-        # Try to write the file — if disk is unavailable (e.g. ephemeral HF Spaces), store metadata only
         file_suffix = Path(recorded_file.filename or "recording.webm").suffix or ".webm"
         new_id = recording_id.strip() or uuid4().hex
-        file_name = f"{new_id}{file_suffix}"
-        destination_path = RECORDINGS_DIR / file_name
         file_bytes = await recorded_file.read()
 
-        try:
-            destination_path.write_bytes(file_bytes)
-            actual_file_path = str(destination_path)
-        except OSError:
-            logger.warning("Recording file write failed for %s — saving metadata only.", new_id)
-            actual_file_path = "no-file"
+        # --- 1. Try Cloudinary upload (primary) ---
+        cloud_url: str | None = None
+        if file_bytes:
+            cloud_url = upload_recording_to_cloud(file_bytes, public_id=new_id)
 
+        # --- 2. Fallback: try local disk ---
+        actual_file_path = "no-file"
+        if not cloud_url:
+            file_name = f"{new_id}{file_suffix}"
+            destination_path = RECORDINGS_DIR / file_name
+            try:
+                destination_path.write_bytes(file_bytes)
+                actual_file_path = str(destination_path)
+            except OSError:
+                logger.warning("Recording file write failed for %s — metadata-only.", new_id)
+
+        final_status = "available" if (cloud_url or actual_file_path != "no-file") else "metadata_only"
         created_at = utc_now()
 
-        # If a recording entry was pre-created by /recordings/start, update it; otherwise create new
+        # --- 3. Update pre-created entry or create new ---
         existing = db.scalar(select(Recording).where(Recording.id == new_id)) if recording_id.strip() else None
 
         if existing:
             existing.title = title.strip() or existing.title
             existing.file_path = actual_file_path
-            existing.status = "available"
+            existing.cloud_url = cloud_url
+            existing.status = final_status
             db.commit()
             db.refresh(existing)
             return serialize_recording(existing, classroom.teacher)
@@ -966,9 +975,10 @@ async def upload_recording(
             teacher_id=classroom.teacher_id,
             title=title.strip(),
             file_path=actual_file_path,
+            cloud_url=cloud_url,
             created_at=created_at,
             expires_at=created_at + timedelta(days=30),
-            status="available",
+            status=final_status,
         )
         db.add(recording)
         db.commit()
@@ -1071,6 +1081,8 @@ def delete_recording_by_id(
             raise HTTPException(status_code=403, detail="You do not have access to delete recordings.")
 
         delete_recording_file(recording.file_path)
+        if recording.id:
+            delete_recording_from_cloud(recording.id)
         db.delete(recording)
         db.commit()
         return RecordingDeleteResponse(success=True, recording_id=recording_id)

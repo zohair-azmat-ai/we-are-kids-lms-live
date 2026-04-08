@@ -65,7 +65,9 @@ export type RecordingItem = {
   created_at: string;
   file_path: string;
   file_url: string;
+  cloud_url: string;
   expires_at: string;
+  status: string;
 };
 
 export type RecordingUpdateResponse = {

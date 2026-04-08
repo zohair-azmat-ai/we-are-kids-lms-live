@@ -335,7 +335,9 @@ def serialize_recording(recording: Recording, teacher: User | None = None) -> Re
         created_at=recording.created_at,
         file_path=recording.file_path,
         file_url=build_recording_file_url(recording),
+        cloud_url=recording.cloud_url or "",
         expires_at=recording.expires_at,
+        status=recording.status,
     )
 
 

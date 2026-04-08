@@ -37,7 +37,9 @@ class RecordingItem(BaseModel):
     created_at: datetime
     file_path: str
     file_url: str
+    cloud_url: str
     expires_at: datetime
+    status: str
 
 
 class RecordingUpdateRequest(BaseModel):
