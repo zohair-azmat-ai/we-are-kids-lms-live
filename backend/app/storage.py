@@ -9,6 +9,7 @@ which keeps the recording metadata-only flow intact.
 import logging
 from pathlib import Path
 from typing import IO
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -82,13 +83,51 @@ def delete_recording_from_cloud(public_id: str, resource_type: str = "video") ->
         return
     try:
         folder = "we-are-kids-lms/recordings"
+        normalized_public_id = (
+            public_id
+            if public_id.startswith(f"{folder}/")
+            else f"{folder}/{public_id}"
+        )
         cloudinary.uploader.destroy(  # type: ignore[attr-defined]
-            f"{folder}/{public_id}",
+            normalized_public_id,
             resource_type=resource_type,
             invalidate=True,
         )
     except Exception as exc:
         logger.warning("Cloudinary delete failed for %s: %s", public_id, exc)
+
+
+def get_cloud_public_id(cloud_url: str | None, fallback_recording_id: str) -> str:
+    """Resolve Cloudinary public_id from stored URL; fallback to recording id."""
+    folder = "we-are-kids-lms/recordings"
+    if not cloud_url:
+        return fallback_recording_id
+
+    try:
+        parsed = urlparse(cloud_url)
+        path = parsed.path
+        if "/upload/" not in path:
+            return fallback_recording_id
+
+        post_upload = path.split("/upload/", 1)[1]
+        parts = [part for part in post_upload.split("/") if part]
+
+        # Strip transformation/version segments like "c_fill" or "v12345".
+        while parts and (parts[0].startswith("v") and parts[0][1:].isdigit()):
+            parts = parts[1:]
+
+        if not parts:
+            return fallback_recording_id
+
+        # Remove file extension from final segment.
+        parts[-1] = Path(parts[-1]).stem
+        public_id = "/".join(parts)
+        if public_id:
+            return public_id if public_id.startswith(f"{folder}/") else public_id
+    except Exception:
+        logger.warning("Unable to parse Cloudinary URL for public_id: %s", cloud_url)
+
+    return fallback_recording_id
 
 
 def cloud_enabled() -> bool:

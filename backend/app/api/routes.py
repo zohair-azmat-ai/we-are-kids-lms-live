@@ -13,7 +13,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.ai_service import answer_ai_chat, get_ai_insights, get_default_ai_insights
-from app.storage import upload_recording_to_cloud, delete_recording_from_cloud
+from app.storage import (
+    upload_recording_to_cloud,
+    delete_recording_from_cloud,
+    get_cloud_public_id,
+)
 from app.auth import authenticate_user, create_access_token, get_current_user, hash_password
 from app.config import (
     LIVEKIT_API_KEY,
@@ -992,11 +996,15 @@ def get_recordings(current_user: User = Depends(get_current_user)) -> list[Recor
     cleanup_expired_recordings()
 
     with SessionLocal() as db:
-        recordings = db.scalars(
+        query = (
             select(Recording)
             .options(selectinload(Recording.teacher))
             .order_by(Recording.created_at.desc())
-        ).all()
+        )
+        if current_user.role == "teacher":
+            query = query.where(Recording.teacher_id == current_user.id)
+
+        recordings = db.scalars(query).all()
         return [serialize_recording(recording) for recording in recordings]
 
 
@@ -1083,10 +1091,11 @@ def delete_recording_by_id(
 
         delete_recording_file(recording.file_path)
         if recording.id:
-            delete_recording_from_cloud(recording.id)
+            cloud_public_id = get_cloud_public_id(recording.cloud_url, recording.id)
+            delete_recording_from_cloud(cloud_public_id)
         db.delete(recording)
         db.commit()
-        return RecordingDeleteResponse(success=True, recording_id=recording_id)
+        return RecordingDeleteResponse(success=True)
 
 
 @api_router.get("/admin/teachers", response_model=list[TeacherSummary])

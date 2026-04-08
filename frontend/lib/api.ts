@@ -77,7 +77,6 @@ export type RecordingUpdateResponse = {
 
 export type RecordingDeleteResponse = {
   success: boolean;
-  recording_id: string;
 };
 
 export type RecordingStartResponse = {

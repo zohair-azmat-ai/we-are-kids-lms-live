@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -105,26 +105,26 @@ export function RecordingsManagement({
   const [classFilter, setClassFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<"" | RecordingStatus>("");
 
-  useEffect(() => {
-    async function loadRecordings() {
-      try {
-        setIsLoading(true);
-        setError("");
-        const savedRecordings = await fetchRecordings();
-        setRecordings(savedRecordings);
-      } catch (requestError) {
-        setError(
-          requestError instanceof Error
-            ? requestError.message
-            : "Unable to load recordings.",
-        );
-      } finally {
-        setIsLoading(false);
-      }
+  const loadRecordings = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError("");
+      const savedRecordings = await fetchRecordings();
+      setRecordings(savedRecordings);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to load recordings.",
+      );
+    } finally {
+      setIsLoading(false);
     }
-
-    void loadRecordings();
   }, []);
+
+  useEffect(() => {
+    void loadRecordings();
+  }, [loadRecordings]);
 
   const teacherScopedRecordings = useMemo(() => {
     if (role !== "teacher") return recordings;
@@ -207,14 +207,18 @@ export function RecordingsManagement({
     try {
       setBusyRecordingId(recordingId);
       setError("");
-      await deleteRecording(recordingId);
+      const response = await deleteRecording(recordingId);
+      if (!response.success) {
+        throw new Error("Delete request did not complete.");
+      }
       setRecordings((current) => current.filter((r) => r.recording_id !== recordingId));
+      await loadRecordings();
       setSuccessMessage("Recording deleted.");
     } catch (requestError) {
       setError(
         requestError instanceof Error
-          ? requestError.message
-          : "Unable to delete recording.",
+          ? `Could not delete this recording. ${requestError.message}`
+          : "Could not delete this recording right now. Please try again.",
       );
     } finally {
       setBusyRecordingId("");

@@ -53,7 +53,6 @@ class RecordingUpdateResponse(BaseModel):
 
 class RecordingDeleteResponse(BaseModel):
     success: bool
-    recording_id: str
 
 
 class RecordingStartRequest(BaseModel):
