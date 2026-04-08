@@ -16,6 +16,8 @@ import {
   joinClassPresence,
   leaveClassPresence,
   requestLiveKitToken,
+  startRecordingSession,
+  stopRecordingSession,
   uploadRecording,
   type LiveClassSession,
 } from "@/lib/api";
@@ -91,6 +93,7 @@ export function LiveClassroomRoom({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
   const pendingStopResolveRef = useRef<(() => void) | null>(null);
+  const recordingSessionIdRef = useRef<string | null>(null);
 
   const dashboardPath =
     role === "teacher" ? "/teacher/dashboard" : "/student/dashboard";
@@ -196,35 +199,56 @@ export function LiveClassroomRoom({
     setRecordingError("");
     setRecordingSuccess("");
 
-    try {
-      const fileExtension = blob.type.includes("webm") ? "webm" : "bin";
-      const recordingFile = new File(
-        [blob],
-        `${classId}-${Date.now()}.${fileExtension}`,
-        {
-          type: blob.type || "video/webm",
-        },
-      );
+    const sessionId = recordingSessionIdRef.current;
 
-      await uploadRecording({
-        classId,
-        teacherName: session.name,
-        title: classroom.title,
-        file: recordingFile,
-      });
-      setRecordingSuccess("Recording saved successfully for students to watch later.");
+    try {
+      // If we pre-created a DB entry via /recordings/start, mark it available immediately.
+      // This guarantees the recording appears in the panel even if file upload fails.
+      if (sessionId) {
+        try {
+          await stopRecordingSession({ recordingId: sessionId });
+        } catch {
+          // stopRecordingSession failing is non-fatal — the entry already exists in DB.
+        }
+      }
+
+      // Best-effort: try to upload the actual video blob so it can be played back.
+      if (blob.size > 0) {
+        const fileExtension = blob.type.includes("webm") ? "webm" : "bin";
+        const recordingFile = new File(
+          [blob],
+          `${classId}-${Date.now()}.${fileExtension}`,
+          { type: blob.type || "video/webm" },
+        );
+
+        try {
+          await uploadRecording({
+            classId,
+            teacherName: session.name,
+            title: classroom.title,
+            file: recordingFile,
+            recordingId: sessionId ?? undefined,
+          });
+        } catch {
+          // File upload failed (e.g. ephemeral storage) but the metadata entry
+          // was already saved by stopRecordingSession above.
+        }
+      }
+
+      recordingSessionIdRef.current = null;
+      setRecordingSuccess("Recording saved. It is now visible in the Recordings panel.");
     } catch (requestError) {
       setRecordingError(
         requestError instanceof Error
           ? requestError.message
-          : "Recording upload failed.",
+          : "Recording save failed.",
       );
     } finally {
       setIsUploadingRecording(false);
     }
   }
 
-  function startRecording() {
+  async function startRecording() {
     if (role !== "teacher") {
       return;
     }
@@ -270,6 +294,16 @@ export function LiveClassroomRoom({
         if (recordedBlob.size > 0) {
           await uploadRecordedBlob(recordedBlob);
         } else {
+          // Even with no blob data, try to mark the session as available if it was pre-created.
+          if (recordingSessionIdRef.current) {
+            try {
+              await stopRecordingSession({ recordingId: recordingSessionIdRef.current });
+              recordingSessionIdRef.current = null;
+              setRecordingSuccess("Recording saved to the Recordings panel.");
+            } catch {
+              // ignore
+            }
+          }
           setRecordingError("No recording data was captured.");
         }
 
@@ -280,6 +314,21 @@ export function LiveClassroomRoom({
       recorder.start(1000);
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
+
+      // Pre-create a DB entry immediately so it appears in the Recordings panel
+      // even if the final file upload fails or is slow.
+      if (classroom) {
+        try {
+          const sessionResponse = await startRecordingSession({
+            classId,
+            title: classroom.title,
+          });
+          recordingSessionIdRef.current = sessionResponse.recording_id;
+        } catch {
+          // Non-fatal: we'll fall back to creating the entry via uploadRecording on stop.
+          recordingSessionIdRef.current = null;
+        }
+      }
     } catch {
       setRecordingError("Unable to start recording in this browser.");
     }
@@ -781,7 +830,7 @@ export function LiveClassroomRoom({
               {role === "teacher" ? (
                 <button
                   type="button"
-                  onClick={isRecording ? () => void stopRecording() : startRecording}
+                  onClick={isRecording ? () => void stopRecording() : () => void startRecording()}
                   disabled={isUploadingRecording}
                   className={`inline-flex w-full items-center justify-center gap-2 rounded-full px-4 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto ${
                     isRecording

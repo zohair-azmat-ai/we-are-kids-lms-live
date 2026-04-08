@@ -1,14 +1,17 @@
 import json
+import logging
 from datetime import timedelta
 from typing import Any
 from urllib import error, request
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import OPENAI_API_KEY, OPENAI_MODEL
-from app.models import Classroom, Enrollment, LiveSession, Recording, User
-from app.schemas import AIInsightItem, AIInsightsResponse, AIChatResponse
+from app.models import Attendance, Classroom, Enrollment, LiveSession, Recording, User
+from app.schemas import AIInsightItem, AIInsightsResponse, AIChatResponse, SessionSummaryResponse
 from app.services import (
     build_billing_usage_summary,
     get_or_create_billing_account,
@@ -19,6 +22,8 @@ from app.services import (
 
 
 FULL_CLASS_THRESHOLD = 8
+ALERT_PRIORITY = {"critical": 3, "warning": 2, "info": 1}
+MAX_ALERT_ITEMS = 3
 
 
 def _serialize_usage_metric(metric: Any) -> dict[str, Any]:
@@ -108,12 +113,25 @@ def build_ai_snapshot(db: Session, current_user: User) -> dict[str, Any]:
 
     recent_session_cutoff = now - timedelta(days=7)
     recent_recording_cutoff = now - timedelta(days=7)
+    recent_attendance_cutoff = now - timedelta(days=7)
     recent_live_sessions = [
         session for session in live_sessions if session.started_at and session.started_at >= recent_session_cutoff
     ]
     recent_recordings = [
         recording for recording in recordings if recording.created_at >= recent_recording_cutoff
     ]
+    attendance_query = select(Attendance).where(Attendance.joined_at >= recent_attendance_cutoff)
+    if classes:
+        attendance_query = attendance_query.where(Attendance.class_id.in_([classroom.id for classroom in classes]))
+    else:
+        attendance_query = attendance_query.where(Attendance.class_id == "__none__")
+    recent_attendance = db.scalars(attendance_query).all()
+    sessions_with_attendance = {record.session_id for record in recent_attendance}
+    avg_attendance_per_session = (
+        round(len(recent_attendance) / len(sessions_with_attendance), 1)
+        if sessions_with_attendance
+        else 0.0
+    )
     expiring_recordings = [
         recording for recording in recordings if recording.expires_at <= now + timedelta(days=2)
     ]
@@ -151,107 +169,241 @@ def build_ai_snapshot(db: Session, current_user: User) -> dict[str, Any]:
         "recent_activity": {
             "recent_live_sessions": len(recent_live_sessions),
             "recent_recordings": len(recent_recordings),
+            "attendance_events_last_7_days": len(recent_attendance),
+            "sessions_with_attendance_last_7_days": len(sessions_with_attendance),
+            "avg_attendance_per_session": avg_attendance_per_session,
         },
         "full_class_threshold": FULL_CLASS_THRESHOLD,
     }
 
 
+def _build_default_ai_insights(scope: str) -> AIInsightsResponse:
+    billing_href = "/admin/billing" if scope == "admin" else "/teacher/dashboard"
+    recordings_href = "/admin/recordings" if scope == "admin" else "/teacher/recordings"
+    live_href = "/admin/live-sessions" if scope == "admin" else "/teacher/dashboard"
+    return AIInsightsResponse(
+        generated_at=utc_now(),
+        summary="All systems are stable. Schedule a live session or review recordings to keep learners engaged.",
+        items=[
+            AIInsightItem(
+                id="engagement-default",
+                alert_type="engagement",
+                title="Schedule your next live session",
+                message="No live sessions have run recently. Starting a session keeps attendance records fresh and learners on track.",
+                severity="warning",
+                cta_label="Go to Live Sessions",
+                cta_href=live_href,
+            ),
+            AIInsightItem(
+                id="status-default",
+                alert_type="status",
+                title="Review expiring recordings",
+                message="Check your recordings panel to make sure key lessons haven't expired. Families rely on replays between sessions.",
+                severity="info",
+                cta_label="Open Recordings",
+                cta_href=recordings_href,
+            ),
+            AIInsightItem(
+                id="capacity-default",
+                alert_type="capacity",
+                title="Plan capacity looks healthy",
+                message="Enrollment limits are within range. Review your billing dashboard if you expect to add more teachers or students soon.",
+                severity="info",
+                cta_label="View Billing",
+                cta_href=billing_href,
+            ),
+        ],
+    )
+
+
+def _merge_messages(*parts: str) -> str:
+    unique_parts: list[str] = []
+    for part in parts:
+        cleaned = part.strip()
+        if cleaned and cleaned not in unique_parts:
+            unique_parts.append(cleaned)
+    return " ".join(unique_parts)
+
+
+def _choose_severity(current: str, candidate: str) -> str:
+    return candidate if ALERT_PRIORITY[candidate] > ALERT_PRIORITY[current] else current
+
+
 def build_ai_insights_from_snapshot(snapshot: dict[str, Any]) -> AIInsightsResponse:
-    items: list[AIInsightItem] = []
+    items_by_type: dict[str, AIInsightItem] = {}
     usage = snapshot["usage"]
     counts = snapshot["counts"]
     classes = snapshot["classes"]
     scope = snapshot["scope"]
+    recent_activity = snapshot["recent_activity"]
 
-    for index, warning in enumerate(usage["warnings"][:3]):
-        items.append(
-            AIInsightItem(
-                id=f"usage-warning-{index}",
-                title="Capacity signal",
-                message=warning,
-                severity="warning",
-                cta_label="Open Billing",
-                cta_href="/admin/billing" if scope == "admin" else None,
+    def upsert_alert(
+        *,
+        alert_type: str,
+        title: str,
+        message: str,
+        severity: str,
+        cta_label: str | None = None,
+        cta_href: str | None = None,
+    ) -> None:
+        existing = items_by_type.get(alert_type)
+        if not existing:
+            items_by_type[alert_type] = AIInsightItem(
+                id=f"{alert_type}-alert",
+                alert_type=alert_type,  # type: ignore[arg-type]
+                title=title,
+                message=message,
+                severity=severity,  # type: ignore[arg-type]
+                cta_label=cta_label,
+                cta_href=cta_href,
             )
-        )
+            return
 
-    if usage["teachers"]["is_at_limit"] or usage["students"]["is_at_limit"] or usage["classes"]["is_at_limit"]:
-        items.append(
-            AIInsightItem(
-                id="upgrade-recommended",
-                title="Upgrade recommended",
-                message="Your current plan is blocking growth in at least one area. Upgrading will unlock more teachers, students, or classes.",
-                severity="critical",
-                cta_label="View Plans",
-                cta_href="/pricing" if scope == "admin" else None,
-            )
-        )
+        merged_message = _merge_messages(existing.message, message)
+        merged_severity = _choose_severity(existing.severity, severity)
+        use_candidate_title = ALERT_PRIORITY[severity] > ALERT_PRIORITY[existing.severity]
+        merged_title = title if use_candidate_title else existing.title
+        merged_cta_label = cta_label or existing.cta_label
+        merged_cta_href = cta_href or existing.cta_href
 
-    if snapshot["recent_activity"]["recent_live_sessions"] == 0:
-        items.append(
-            AIInsightItem(
-                id="low-live-activity",
-                title="Class engagement looks low",
-                message="No live sessions have been started in the last 7 days. Consider scheduling a new lesson or checking teacher activity.",
-                severity="warning",
-                cta_label="Review Live Sessions",
-                cta_href="/admin/live-sessions" if scope == "admin" else "/teacher/dashboard",
-            )
-        )
-
-    if snapshot["recent_activity"]["recent_recordings"] == 0:
-        items.append(
-            AIInsightItem(
-                id="recording-activity",
-                title="Recordings need attention",
-                message="No new recordings were created in the last 7 days. Recording a recent lesson can improve replay access for families and staff.",
-                severity="info",
-                cta_label="Manage Recordings",
-                cta_href="/admin/recordings" if scope == "admin" else "/teacher/recordings",
-            )
+        items_by_type[alert_type] = AIInsightItem(
+            id=existing.id,
+            alert_type=existing.alert_type,
+            title=merged_title,
+            message=merged_message,
+            severity=merged_severity,  # type: ignore[arg-type]
+            cta_label=merged_cta_label,
+            cta_href=merged_cta_href,
         )
 
     full_classes = [classroom for classroom in classes if classroom["is_full"]]
+    at_limit_resources = [
+        resource_name
+        for resource_name in ("teachers", "students", "classes")
+        if usage[resource_name]["is_at_limit"]
+    ]
+    near_limit_resources = [
+        resource_name
+        for resource_name in ("teachers", "students", "classes")
+        if usage[resource_name]["is_near_limit"] and resource_name not in at_limit_resources
+    ]
 
-    if full_classes:
-        items.append(
-            AIInsightItem(
-                id="full-classes",
-                title="Some classes are full",
-                message=(
-                    f"{len(full_classes)} class(es) have {snapshot['full_class_threshold']} or more enrolled students. "
-                    "Adding another class may help distribute workload."
-                ),
-                severity="info",
-                cta_label="Manage Classes",
-                cta_href="/admin/classes" if scope == "admin" else None,
-            )
+    # Capacity + upgrade merged into one alert to avoid two critical cards for the same root cause
+    if at_limit_resources:
+        limit_list = ", ".join(at_limit_resources)
+        extra = f" Additionally, {len(full_classes)} class(es) are at the learner threshold." if full_classes else ""
+        upsert_alert(
+            alert_type="capacity",
+            title=f"Plan limit reached for {limit_list}",
+            message=(
+                f"Enrollment is blocked for {limit_list} — your plan has no remaining slots.{extra} "
+                "Upgrade now to unblock enrolment and avoid disrupting teachers or families."
+            ),
+            severity="critical",
+            cta_label="Upgrade Plan",
+            cta_href="/pricing",
+        )
+    elif near_limit_resources:
+        near_list = ", ".join(near_limit_resources)
+        full_note = f" {len(full_classes)} class(es) are also nearing capacity." if full_classes else ""
+        upsert_alert(
+            alert_type="capacity",
+            title="Approaching plan limits",
+            message=(
+                f"Usage is close to the ceiling for {near_list}.{full_note} "
+                "Consider upgrading before enrolment is blocked."
+            ),
+            severity="warning",
+            cta_label="Review Billing",
+            cta_href="/admin/billing" if scope == "admin" else "/pricing",
+        )
+    elif full_classes:
+        upsert_alert(
+            alert_type="capacity",
+            title=f"{len(full_classes)} class(es) are full",
+            message=(
+                f"{len(full_classes)} class(es) have reached {snapshot['full_class_threshold']} or more learners. "
+                "Adding a new class section will help distribute enrolment."
+            ),
+            severity="info",
+            cta_label="Manage Classes",
+            cta_href="/admin/classes" if scope == "admin" else None,
         )
 
+    # Engagement — pick the single most important signal only
+    no_sessions = recent_activity["recent_live_sessions"] == 0
+    no_attendance = recent_activity["attendance_events_last_7_days"] == 0
+
+    if no_sessions:
+        upsert_alert(
+            alert_type="engagement",
+            title="No live sessions this week",
+            message=(
+                "No live sessions have been started in the last 7 days. "
+                "Scheduling a lesson keeps attendance records active and learners engaged."
+            ),
+            severity="warning",
+            cta_label="Start a Session",
+            cta_href="/admin/live-sessions" if scope == "admin" else "/teacher/dashboard",
+        )
+    elif no_attendance:
+        upsert_alert(
+            alert_type="engagement",
+            title="Attendance data missing",
+            message=(
+                f"{recent_activity['recent_live_sessions']} session(s) ran this week but no attendance was recorded. "
+                "Check that the attendance panel is active during lessons."
+            ),
+            severity="warning",
+            cta_label="Review Sessions",
+            cta_href="/admin/live-sessions" if scope == "admin" else "/teacher/dashboard",
+        )
+    else:
+        avg = recent_activity["avg_attendance_per_session"]
+        upsert_alert(
+            alert_type="engagement",
+            title="Weekly activity looks healthy",
+            message=(
+                f"{recent_activity['recent_live_sessions']} session(s) ran this week "
+                f"with an average of {avg} learner(s) per session."
+            ),
+            severity="info",
+            cta_label="View Sessions",
+            cta_href="/admin/live-sessions" if scope == "admin" else "/teacher/dashboard",
+        )
+
+    # Recordings expiry — only if genuinely urgent
     if counts["recordings_expiring_soon"] > 0:
-        items.append(
-            AIInsightItem(
-                id="recordings-expiring",
-                title="Recordings expiring soon",
-                message=f"{counts['recordings_expiring_soon']} recording(s) will expire within 2 days. Review or replace important lessons soon.",
-                severity="info",
-                cta_label="Open Recordings",
-                cta_href="/admin/recordings" if scope == "admin" else "/teacher/recordings",
-            )
+        upsert_alert(
+            alert_type="status",
+            title=f"{counts['recordings_expiring_soon']} recording(s) expiring soon",
+            message=(
+                f"{counts['recordings_expiring_soon']} recording(s) will expire within 2 days. "
+                "Review or replace them so families keep replay access."
+            ),
+            severity="warning",
+            cta_label="Open Recordings",
+            cta_href="/admin/recordings" if scope == "admin" else "/teacher/recordings",
         )
 
-    if not items:
-        items.append(
-            AIInsightItem(
-                id="all-clear",
-                title="Healthy operations",
-                message="Your current setup looks stable. Usage is under control and recent activity signals are healthy.",
-                severity="info",
-            )
-        )
+    if not items_by_type:
+        return _build_default_ai_insights(scope)
 
-    summary = items[0].message if items else "No insights available."
-    return AIInsightsResponse(generated_at=utc_now(), summary=summary, items=items[:5])
+    sorted_items = sorted(
+        items_by_type.values(),
+        key=lambda item: ALERT_PRIORITY[item.severity],
+        reverse=True,
+    )
+    top_items = sorted_items[:MAX_ALERT_ITEMS]
+
+    # Build a short, specific summary from the top alert
+    top = top_items[0]
+    summary = top.title if len(top.title) < 80 else top.message[:120]
+    return AIInsightsResponse(generated_at=utc_now(), summary=summary, items=top_items)
+
+
+def get_default_ai_insights(scope: str) -> AIInsightsResponse:
+    return _build_default_ai_insights(scope)
 
 
 def _build_system_prompt(snapshot: dict[str, Any], insights: AIInsightsResponse) -> str:
@@ -320,17 +472,23 @@ def _call_openai(question: str, snapshot: dict[str, Any], insights: AIInsightsRe
     )
 
     try:
-        with request.urlopen(req, timeout=30) as response:
+        with request.urlopen(req, timeout=20) as response:
             response_payload = json.loads(response.read().decode("utf-8"))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
+        logger.error("OpenAI HTTP error: %s", detail or exc.reason)
         raise RuntimeError(f"OpenAI request failed: {detail or exc.reason}") from exc
     except error.URLError as exc:
+        logger.error("OpenAI URL error: %s", exc.reason)
         raise RuntimeError("OpenAI request could not be completed.") from exc
+    except TimeoutError as exc:
+        logger.error("OpenAI request timed out")
+        raise RuntimeError("OpenAI request timed out.") from exc
 
     answer = _extract_output_text(response_payload)
 
     if not answer:
+        logger.warning("OpenAI returned an empty answer for question: %s", question[:80])
         raise RuntimeError("OpenAI returned an empty answer.")
 
     return answer
@@ -400,6 +558,131 @@ def _fallback_answer(question: str, snapshot: dict[str, Any], insights: AIInsigh
     )
 
 
+def _fallback_session_summary(
+    class_title: str,
+    teacher_name: str,
+    total_attended: int,
+    duration_minutes: int,
+    started_at: str,
+) -> dict[str, Any]:
+    """Structured fallback summary when OpenAI is not available."""
+    attended_line = (
+        f"{total_attended} student(s) attended" if total_attended > 0 else "No student attendance recorded"
+    )
+    duration_line = f"Session ran for approximately {duration_minutes} minute(s)" if duration_minutes > 0 else "Session duration unknown"
+    return {
+        "summary_text": (
+            f"{teacher_name} completed a live session for {class_title} on {started_at}. "
+            f"{attended_line}. {duration_line}."
+        ),
+        "key_points": [
+            f"Class: {class_title}",
+            f"Teacher: {teacher_name}",
+            duration_line,
+            attended_line,
+        ],
+        "action_items": [
+            "Review any uploaded recording from this session",
+            "Follow up with students who were absent",
+            "Check attendance panel for individual join/leave times",
+        ],
+        "source_type": "fallback",
+    }
+
+
+def _call_openai_summary(
+    class_title: str,
+    teacher_name: str,
+    total_attended: int,
+    duration_minutes: int,
+    started_at: str,
+) -> dict[str, Any]:
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OpenAI API key is missing.")
+
+    prompt = (
+        f"Write a concise post-session summary for a live classroom session.\n\n"
+        f"Class: {class_title}\n"
+        f"Teacher: {teacher_name}\n"
+        f"Date/Time: {started_at}\n"
+        f"Duration: {duration_minutes} minute(s)\n"
+        f"Students who attended: {total_attended}\n\n"
+        "Return a JSON object with exactly these fields:\n"
+        '- "summary_text": a 2-3 sentence overview\n'
+        '- "key_points": an array of 3-4 short bullet strings\n'
+        '- "action_items": an array of 2-3 follow-up action strings\n\n'
+        "Respond only with valid JSON. No markdown, no code blocks."
+    )
+
+    body = {
+        "model": OPENAI_MODEL,
+        "input": [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": prompt}],
+            }
+        ],
+    }
+
+    req = request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with request.urlopen(req, timeout=30) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+    except (error.HTTPError, error.URLError) as exc:
+        raise RuntimeError("OpenAI summary request failed.") from exc
+
+    raw_text = _extract_output_text(response_payload)
+
+    if not raw_text:
+        raise RuntimeError("OpenAI returned empty summary.")
+
+    try:
+        parsed = json.loads(raw_text)
+        return {
+            "summary_text": str(parsed.get("summary_text", "")),
+            "key_points": [str(p) for p in parsed.get("key_points", [])],
+            "action_items": [str(a) for a in parsed.get("action_items", [])],
+            "source_type": "ai",
+        }
+    except (json.JSONDecodeError, TypeError):
+        raise RuntimeError("OpenAI returned non-JSON summary.")
+
+
+def generate_session_summary(
+    class_title: str,
+    teacher_name: str,
+    total_attended: int,
+    duration_minutes: int,
+    started_at: str,
+) -> dict[str, Any]:
+    """Generate a session summary using OpenAI if available, otherwise use fallback."""
+    try:
+        return _call_openai_summary(
+            class_title=class_title,
+            teacher_name=teacher_name,
+            total_attended=total_attended,
+            duration_minutes=duration_minutes,
+            started_at=started_at,
+        )
+    except RuntimeError:
+        return _fallback_session_summary(
+            class_title=class_title,
+            teacher_name=teacher_name,
+            total_attended=total_attended,
+            duration_minutes=duration_minutes,
+            started_at=started_at,
+        )
+
+
 def answer_ai_chat(db: Session, current_user: User, question: str) -> AIChatResponse:
     cleaned_question = question.strip()
 
@@ -413,7 +696,8 @@ def answer_ai_chat(db: Session, current_user: User, question: str) -> AIChatResp
         answer = _call_openai(cleaned_question, snapshot, insights)
         suggestions = [item.title for item in insights.items[:3]]
         return AIChatResponse(answer=answer, suggestions=suggestions, source="openai")
-    except RuntimeError:
+    except RuntimeError as exc:
+        logger.warning("OpenAI chat failed, using fallback: %s", exc)
         answer, suggestions = _fallback_answer(cleaned_question, snapshot, insights)
         return AIChatResponse(answer=answer, suggestions=suggestions, source="fallback")
 

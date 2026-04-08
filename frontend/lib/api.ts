@@ -78,6 +78,11 @@ export type RecordingDeleteResponse = {
   recording_id: string;
 };
 
+export type RecordingStartResponse = {
+  recording_id: string;
+  message: string;
+};
+
 export type UserStatus = "active" | "inactive";
 export type ClassStatus = "active" | "archived";
 export type LiveStatus = "live" | "scheduled" | "ended";
@@ -223,6 +228,7 @@ export type AIChatResponse = {
 
 export type AIInsightItem = {
   id: string;
+  alert_type: "capacity" | "upgrade" | "engagement" | "status";
   title: string;
   message: string;
   severity: "info" | "warning" | "critical";
@@ -285,10 +291,26 @@ export type AttendanceSummary = {
   session_id: string;
   class_id: string;
   class_title: string;
+  session_status: string;
   started_at: string | null;
   total_attended: number;
   currently_present: number;
   records: AttendanceRecord[];
+};
+
+export type SessionSummaryResponse = {
+  id: number;
+  session_id: string;
+  class_id: string;
+  class_title: string;
+  teacher_name: string;
+  summary_text: string;
+  key_points: string[];
+  action_items: string[];
+  generated_at: string;
+  source_type: "ai" | "fallback";
+  total_attended: number;
+  started_at: string | null;
 };
 
 async function parseResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
@@ -341,6 +363,48 @@ async function requestJson<T>(
 
     throw new Error("Unable to reach the school platform right now. Please try again.");
   }
+}
+
+const memoryCache = new Map<string, { expiresAt: number; data: unknown }>();
+
+function readCache<T>(key: string): T | null {
+  const entry = memoryCache.get(key);
+  if (!entry) {
+    return null;
+  }
+  if (entry.expiresAt <= Date.now()) {
+    memoryCache.delete(key);
+    return null;
+  }
+  return entry.data as T;
+}
+
+function writeCache<T>(key: string, data: T, ttlMs: number): void {
+  memoryCache.set(key, { expiresAt: Date.now() + ttlMs, data });
+}
+
+function invalidateCacheByPrefix(prefix: string): void {
+  for (const key of memoryCache.keys()) {
+    if (key.startsWith(prefix)) {
+      memoryCache.delete(key);
+    }
+  }
+}
+
+async function requestCachedJson<T>(
+  key: string,
+  path: string,
+  ttlMs: number,
+  init: RequestInit,
+  fallbackMessage: string,
+): Promise<T> {
+  const cached = readCache<T>(key);
+  if (cached) {
+    return cached;
+  }
+  const fresh = await requestJson<T>(path, init, fallbackMessage);
+  writeCache(key, fresh, ttlMs);
+  return fresh;
 }
 
 export function getApiBaseUrl(): string {
@@ -411,8 +475,10 @@ export async function fetchCurrentUser(): Promise<AuthUser> {
 }
 
 export async function fetchLiveClasses(): Promise<LiveClassSession[]> {
-  return requestJson<LiveClassSession[]>(
+  return requestCachedJson<LiveClassSession[]>(
+    "live-classes",
     "/api/v1/classes/live",
+    20_000,
     { cache: "no-store" },
     "Live classes request failed.",
   );
@@ -421,7 +487,7 @@ export async function fetchLiveClasses(): Promise<LiveClassSession[]> {
 export async function startLiveClass(
   teacherEmail: string,
 ): Promise<LiveClassSession> {
-  return requestJson<LiveClassSession>(
+  const result = await requestJson<LiveClassSession>(
     "/api/v1/classes/start",
     {
       method: "POST",
@@ -434,13 +500,17 @@ export async function startLiveClass(
     },
     "Start class request failed.",
   );
+  invalidateCacheByPrefix("live-classes");
+  invalidateCacheByPrefix("admin-live-sessions");
+  invalidateCacheByPrefix("class-session:");
+  return result;
 }
 
 export async function endLiveClass(
   classId: string,
   teacherEmail: string,
 ): Promise<SuccessResponse> {
-  return requestJson<SuccessResponse>(
+  const result = await requestJson<SuccessResponse>(
     `/api/v1/classes/${classId}/end`,
     {
       method: "POST",
@@ -453,6 +523,10 @@ export async function endLiveClass(
     },
     "End class request failed.",
   );
+  invalidateCacheByPrefix("live-classes");
+  invalidateCacheByPrefix("admin-live-sessions");
+  invalidateCacheByPrefix(`class-session:${classId}`);
+  return result;
 }
 
 export async function joinClassPresence(params: {
@@ -461,7 +535,7 @@ export async function joinClassPresence(params: {
   participantEmail: string;
   participantName: string;
 }): Promise<LiveClassSession> {
-  return requestJson<LiveClassSession>(
+  const result = await requestJson<LiveClassSession>(
     `/api/v1/classes/${params.classId}/presence/join`,
     {
       method: "POST",
@@ -476,6 +550,8 @@ export async function joinClassPresence(params: {
     },
     "Unable to register classroom join.",
   );
+  invalidateCacheByPrefix(`class-session:${params.classId}`);
+  return result;
 }
 
 export async function leaveClassPresence(params: {
@@ -484,7 +560,7 @@ export async function leaveClassPresence(params: {
   participantEmail: string;
   participantName: string;
 }): Promise<LiveClassSession> {
-  return requestJson<LiveClassSession>(
+  const result = await requestJson<LiveClassSession>(
     `/api/v1/classes/${params.classId}/presence/leave`,
     {
       method: "POST",
@@ -499,13 +575,17 @@ export async function leaveClassPresence(params: {
     },
     "Unable to register classroom leave.",
   );
+  invalidateCacheByPrefix(`class-session:${params.classId}`);
+  return result;
 }
 
 export async function fetchClassSession(
   classId: string,
 ): Promise<LiveClassSession> {
-  return requestJson<LiveClassSession>(
+  return requestCachedJson<LiveClassSession>(
+    `class-session:${classId}`,
     `/api/v1/classes/${classId}`,
+    15_000,
     { cache: "no-store" },
     "Class session request failed.",
   );
@@ -535,17 +615,50 @@ export async function requestLiveKitToken(params: {
   );
 }
 
+export async function startRecordingSession(params: {
+  classId: string;
+  title: string;
+}): Promise<RecordingStartResponse> {
+  return requestJson<RecordingStartResponse>(
+    "/api/v1/recordings/start",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ class_id: params.classId, title: params.title }),
+    },
+    "Recording start failed.",
+  );
+}
+
+export async function stopRecordingSession(params: {
+  recordingId: string;
+}): Promise<RecordingItem> {
+  return requestJson<RecordingItem>(
+    "/api/v1/recordings/stop",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recording_id: params.recordingId }),
+    },
+    "Recording stop failed.",
+  );
+}
+
 export async function uploadRecording(params: {
   classId: string;
   teacherName: string;
   title: string;
   file: File;
+  recordingId?: string;
 }): Promise<RecordingItem> {
   const formData = new FormData();
   formData.append("class_id", params.classId);
   formData.append("teacher_name", params.teacherName);
   formData.append("title", params.title);
   formData.append("recorded_file", params.file);
+  if (params.recordingId) {
+    formData.append("recording_id", params.recordingId);
+  }
 
   return requestJson<RecordingItem>(
     "/api/v1/recordings/upload",
@@ -756,8 +869,10 @@ export async function deleteAdminClass(
 }
 
 export async function fetchAdminLiveSessions(): Promise<AdminLiveSession[]> {
-  return requestJson<AdminLiveSession[]>(
+  return requestCachedJson<AdminLiveSession[]>(
+    "admin-live-sessions",
     "/api/v1/admin/live-sessions",
+    20_000,
     { cache: "no-store" },
     "Live sessions request failed.",
   );
@@ -766,13 +881,17 @@ export async function fetchAdminLiveSessions(): Promise<AdminLiveSession[]> {
 export async function endAdminLiveSession(
   classId: string,
 ): Promise<SuccessResponse> {
-  return requestJson<SuccessResponse>(
+  const result = await requestJson<SuccessResponse>(
     `/api/v1/admin/live-sessions/${classId}/end`,
     {
       method: "POST",
     },
     "End live session failed.",
   );
+  invalidateCacheByPrefix("live-classes");
+  invalidateCacheByPrefix("admin-live-sessions");
+  invalidateCacheByPrefix(`class-session:${classId}`);
+  return result;
 }
 
 export async function fetchBillingSubscription(
@@ -873,7 +992,7 @@ export async function fetchAIInsights(): Promise<AIInsightsResponse> {
   return requestJson<AIInsightsResponse>(
     "/api/v1/ai/insights",
     { cache: "no-store" },
-    "AI insights request failed.",
+    "Unable to load operational insights right now.",
   );
 }
 
@@ -918,5 +1037,35 @@ export async function fetchClassAttendance(
     `/api/v1/attendance/class/${classId}`,
     { cache: "no-store" },
     "Class attendance request failed.",
+  );
+}
+
+export async function fetchSessionSummary(
+  sessionId: string,
+): Promise<SessionSummaryResponse> {
+  return requestJson<SessionSummaryResponse>(
+    `/api/v1/summaries/session/${sessionId}`,
+    { cache: "no-store" },
+    "Session summary request failed.",
+  );
+}
+
+export async function fetchClassSummaries(
+  classId: string,
+): Promise<SessionSummaryResponse[]> {
+  return requestJson<SessionSummaryResponse[]>(
+    `/api/v1/summaries/class/${classId}`,
+    { cache: "no-store" },
+    "Class summaries request failed.",
+  );
+}
+
+export async function generateSessionSummary(
+  sessionId: string,
+): Promise<SessionSummaryResponse> {
+  return requestJson<SessionSummaryResponse>(
+    `/api/v1/summaries/generate/${sessionId}`,
+    { method: "POST" },
+    "Summary generation request failed.",
   );
 }

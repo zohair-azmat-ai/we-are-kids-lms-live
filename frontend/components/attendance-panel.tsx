@@ -7,6 +7,7 @@ import {
   fetchTeacherAttendance,
   type AttendanceSummary,
 } from "@/lib/api";
+import { SessionSummaryCard } from "@/components/session-summary-card";
 
 type Props = {
   /** Pass classId to show attendance for a specific class across all its sessions. */
@@ -190,6 +191,11 @@ export function AttendancePanel({ classId, mode = "teacher", title = "Attendance
                       </table>
                     </div>
                   )}
+
+                  {/* Session summary — only show for completed sessions */}
+                  {summary.session_status === "ended" ? (
+                    <SessionSummaryCard sessionId={summary.session_id} />
+                  ) : null}
                 </div>
               ) : null}
             </div>

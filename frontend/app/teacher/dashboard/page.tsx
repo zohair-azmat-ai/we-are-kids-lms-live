@@ -25,18 +25,16 @@ export default function TeacherDashboardPage() {
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
   const [analytics, setAnalytics] = useState<TeacherAnalyticsResponse | null>(null);
   const [recordingsError, setRecordingsError] = useState("");
+  const [analyticsError, setAnalyticsError] = useState("");
   const [isLoadingRecordings, setIsLoadingRecordings] = useState(true);
+  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(true);
 
   useEffect(() => {
     async function loadRecordings() {
       try {
         setIsLoadingRecordings(true);
-        const [savedRecordings, analyticsResponse] = await Promise.all([
-          fetchRecordings(),
-          fetchTeacherAnalytics(),
-        ]);
+        const savedRecordings = await fetchRecordings();
         setRecordings(savedRecordings);
-        setAnalytics(analyticsResponse);
       } catch (requestError) {
         setRecordingsError(
           requestError instanceof Error
@@ -48,7 +46,24 @@ export default function TeacherDashboardPage() {
       }
     }
 
+    async function loadAnalytics() {
+      try {
+        setIsLoadingAnalytics(true);
+        const analyticsResponse = await fetchTeacherAnalytics();
+        setAnalytics(analyticsResponse);
+      } catch (requestError) {
+        setAnalyticsError(
+          requestError instanceof Error
+            ? requestError.message
+            : "Unable to load analytics.",
+        );
+      } finally {
+        setIsLoadingAnalytics(false);
+      }
+    }
+
     void loadRecordings();
+    void loadAnalytics();
   }, []);
 
   async function handleStartLiveClass() {
@@ -80,7 +95,7 @@ export default function TeacherDashboardPage() {
       title="Teacher Dashboard"
       subtitle="Manage your classes, start live lessons, and keep recordings organized in one calm teaching space."
     >
-      <div className="grid gap-6 lg:grid-cols-[1fr_0.9fr]">
+      <div className="grid gap-4 sm:gap-6 lg:grid-cols-[1fr_0.9fr]">
         <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
           <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">
             Assigned Classes
@@ -123,7 +138,23 @@ export default function TeacherDashboardPage() {
         </section>
       </div>
 
-      {analytics ? (
+      {isLoadingAnalytics ? (
+        <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+          <div className="animate-pulse space-y-4">
+            <div className="h-6 w-52 rounded-xl bg-slate-100" />
+            <div className="h-4 w-72 rounded-xl bg-slate-100" />
+            <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-5">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="h-24 rounded-[1.75rem] bg-slate-100" />
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : analyticsError ? (
+        <section className="mt-8 rounded-[2rem] border border-red-100 bg-red-50 p-6 shadow-soft">
+          <p className="text-sm text-red-600">{analyticsError}</p>
+        </section>
+      ) : analytics ? (
         <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -137,7 +168,7 @@ export default function TeacherDashboardPage() {
             <p className="text-sm text-slate-500">{analytics.participation_summary}</p>
           </div>
 
-          <div className="mt-5 grid gap-4 lg:grid-cols-5">
+          <div className="mt-5 grid gap-3 sm:gap-4 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
             {[
               { label: "Assigned Classes", value: analytics.assigned_classes, accent: "text-blue-600" },
               { label: "Live Sessions", value: analytics.live_sessions_run, accent: "text-red-500" },
