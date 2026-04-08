@@ -689,6 +689,16 @@ export async function fetchRecording(
   );
 }
 
+export async function fetchPublicRecording(
+  recordingId: string,
+): Promise<RecordingItem> {
+  return requestJson<RecordingItem>(
+    `/api/v1/public/recordings/${recordingId}`,
+    { cache: "no-store" },
+    "This recording is unavailable.",
+  );
+}
+
 export async function updateRecordingTitle(
   recordingId: string,
   title: string,

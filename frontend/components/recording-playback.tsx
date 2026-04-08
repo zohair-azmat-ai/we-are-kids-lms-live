@@ -78,10 +78,9 @@ export function RecordingPlayback({
 
   async function copyShareLink() {
     if (!recording) return;
-    const url = resolvePlayUrl(recording);
-    if (!url) return;
+    const shareUrl = `${window.location.origin}/public/recordings/${recording.recording_id}`;
     try {
-      await navigator.clipboard.writeText(url);
+      await navigator.clipboard.writeText(shareUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {

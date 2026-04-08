@@ -1035,6 +1035,32 @@ def get_recording_by_id(
         return serialize_recording(recording)
 
 
+@api_router.get("/public/recordings/{recording_id}", response_model=RecordingItem)
+def get_public_recording_by_id(recording_id: str) -> RecordingItem:
+    cleanup_expired_recordings()
+
+    with SessionLocal() as db:
+        recording = db.scalar(
+            select(Recording)
+            .options(selectinload(Recording.teacher))
+            .where(Recording.id == recording_id)
+        )
+
+        if not recording:
+            raise HTTPException(status_code=404, detail="Recording not found.")
+
+        if recording.expires_at <= utc_now_naive():
+            delete_recording_file(recording.file_path)
+            db.delete(recording)
+            db.commit()
+            raise HTTPException(status_code=410, detail="This recording has expired.")
+
+        if recording.status != "available":
+            raise HTTPException(status_code=404, detail="Recording is not publicly available.")
+
+        return serialize_recording(recording)
+
+
 @api_router.patch("/recordings/{recording_id}", response_model=RecordingUpdateResponse)
 def update_recording_by_id(
     recording_id: str,

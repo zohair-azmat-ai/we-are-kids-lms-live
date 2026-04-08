@@ -159,11 +159,10 @@ export function RecordingsManagement({
     setPreviewRecordingId((current) => (current === recordingId ? "" : recordingId));
   }
 
-  async function copyShareLink(recording: RecordingItem) {
-    const url = resolvePlayUrl(recording);
-    if (!url) return;
+async function copyShareLink(recording: RecordingItem) {
+    const shareUrl = `${window.location.origin}/public/recordings/${recording.recording_id}`;
     try {
-      await navigator.clipboard.writeText(url);
+      await navigator.clipboard.writeText(shareUrl);
       setCopiedId(recording.recording_id);
       setTimeout(() => setCopiedId(""), 2000);
     } catch {
