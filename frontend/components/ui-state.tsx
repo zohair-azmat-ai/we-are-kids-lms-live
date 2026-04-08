@@ -13,6 +13,8 @@ type LoadingPanelProps = {
 type EmptyStateProps = {
   title: string;
   message: string;
+  ctaLabel?: string;
+  onCtaClick?: () => void;
 };
 
 export function Spinner({ className = "" }: SpinnerProps) {
@@ -46,11 +48,23 @@ export function LoadingPanel({
   );
 }
 
-export function EmptyState({ title, message }: EmptyStateProps) {
+export function EmptyState({ title, message, ctaLabel, onCtaClick }: EmptyStateProps) {
   return (
-    <div className="rounded-[1.75rem] border border-dashed border-slate-200 bg-slate-50 px-5 py-8 text-center">
-      <p className="text-base font-semibold text-slate-800">{title}</p>
-      <p className="mt-2 text-sm leading-6 text-slate-600">{message}</p>
+    <div className="glass-card rounded-2xl px-5 py-8 text-center">
+      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+        <span className="text-lg font-semibold">◎</span>
+      </div>
+      <p className="mt-4 text-base font-semibold tracking-tight text-slate-800">{title}</p>
+      <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-600">{message}</p>
+      {ctaLabel && onCtaClick ? (
+        <button
+          type="button"
+          onClick={onCtaClick}
+          className="premium-button btn-primary mt-5 px-4 py-2 text-sm font-semibold"
+        >
+          {ctaLabel}
+        </button>
+      ) : null}
     </div>
   );
 }

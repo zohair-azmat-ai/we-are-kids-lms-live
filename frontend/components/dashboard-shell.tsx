@@ -91,9 +91,9 @@ export function DashboardShell({
   }
 
   return (
-    <main className="min-h-screen pb-[max(128px,calc(env(safe-area-inset-bottom)+128px))]">
+    <main className="min-h-screen bg-gradient-to-b from-white via-slate-50/70 to-slate-100/60 pb-[max(128px,calc(env(safe-area-inset-bottom)+128px))]">
       <div className="mx-auto max-w-7xl px-6 py-6 sm:px-8 lg:px-10">
-        <header className="rounded-[2rem] border border-slate-100 bg-white px-5 py-4 shadow-soft sm:px-6">
+        <header className="glass-card rounded-2xl px-5 py-4 sm:px-6">
           <div className="flex items-center justify-between gap-4">
             <div className="flex min-w-0 items-center gap-3">
               <Image
@@ -104,7 +104,7 @@ export function DashboardShell({
                 className="h-11 w-auto object-contain"
               />
               <div className="min-w-0">
-                <p className="truncate text-lg font-bold text-slate-800">
+                <p className="truncate text-lg font-semibold tracking-tight text-slate-800">
                   We Are Kids Nursery
                 </p>
                 <p className="truncate text-sm text-slate-500">{title}</p>
@@ -112,7 +112,7 @@ export function DashboardShell({
             </div>
 
             <div className="hidden items-center gap-3 lg:flex">
-              <nav className="flex flex-wrap items-center gap-2 rounded-full border border-slate-100 bg-slate-50 px-2 py-2">
+              <nav className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200/70 bg-white/70 px-2 py-2 backdrop-blur">
                 {dashboardLinks.map((link) => {
                   const isActive = pathname === link.href;
 
@@ -120,9 +120,9 @@ export function DashboardShell({
                     <Link
                       key={link.href}
                       href={link.href}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                      className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
                         isActive
-                          ? "bg-white text-blue-700 shadow-sm"
+                          ? "bg-gradient-to-r from-blue-600 to-blue-500 text-white shadow-lg shadow-blue-100"
                           : "text-slate-600 hover:bg-white hover:text-slate-800"
                       }`}
                     >
@@ -133,14 +133,14 @@ export function DashboardShell({
               </nav>
               <Link
                 href="/"
-                className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-900"
+                className="premium-button btn-secondary inline-flex items-center justify-center px-4 py-2 text-sm font-semibold"
               >
                 Back Home
               </Link>
               <button
                 type="button"
                 onClick={handleLogout}
-                className="inline-flex items-center justify-center rounded-full bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-red-100 transition hover:-translate-y-0.5"
+                className="premium-button btn-danger inline-flex items-center justify-center px-4 py-2 text-sm font-semibold"
               >
                 Logout
               </button>
@@ -149,7 +149,7 @@ export function DashboardShell({
             <button
               type="button"
               onClick={() => setIsMenuOpen((currentValue) => !currentValue)}
-              className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 lg:hidden"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white/80 text-slate-700 lg:hidden"
               aria-label="Toggle dashboard menu"
               aria-expanded={isMenuOpen}
             >
@@ -172,10 +172,10 @@ export function DashboardShell({
                       key={link.href}
                       href={link.href}
                       onClick={() => setIsMenuOpen(false)}
-                      className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${
+                      className={`rounded-xl px-4 py-3 text-sm font-semibold transition ${
                         isActive
-                          ? "bg-blue-50 text-blue-700"
-                          : "border border-slate-100 bg-slate-50 text-slate-700"
+                          ? "bg-gradient-to-r from-blue-600 to-blue-500 text-white"
+                          : "border border-slate-200 bg-white/80 text-slate-700"
                       }`}
                     >
                       {link.label}
@@ -186,14 +186,14 @@ export function DashboardShell({
                   <Link
                     href="/"
                     onClick={() => setIsMenuOpen(false)}
-                    className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+                    className="premium-button btn-secondary inline-flex items-center justify-center px-4 py-3 text-sm font-semibold"
                   >
                     Back Home
                   </Link>
                   <button
                     type="button"
                     onClick={handleLogout}
-                    className="inline-flex items-center justify-center rounded-full bg-red-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-red-100"
+                    className="premium-button btn-danger inline-flex items-center justify-center px-4 py-3 text-sm font-semibold"
                   >
                     Logout
                   </button>
@@ -203,17 +203,17 @@ export function DashboardShell({
           ) : null}
         </header>
 
-        <section className="mt-8 rounded-[2.5rem] border border-slate-100 bg-white px-5 py-8 shadow-soft sm:px-8 sm:py-10">
+        <section className="glass-card mt-8 rounded-2xl px-5 py-8 sm:px-8 sm:py-10">
           <p className="text-sm font-semibold uppercase tracking-[0.28em] text-blue-600">
             Welcome Back
           </p>
-          <h1 className="mt-4 text-3xl font-semibold text-slate-800 sm:text-5xl">
+          <h1 className="mt-4 text-3xl font-semibold tracking-tight text-slate-800 sm:text-5xl">
             {user.name}
           </h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600 sm:text-lg sm:leading-8">
             {subtitle}
           </p>
-          <div className="mt-6 inline-flex max-w-full rounded-full bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700">
+          <div className="mt-6 inline-flex max-w-full rounded-xl bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700">
             Signed in as {user.email}
           </div>
         </section>

@@ -65,7 +65,9 @@ export type RecordingItem = {
   created_at: string;
   file_path: string;
   file_url: string;
+  cloud_url: string;
   expires_at: string;
+  status: string;
 };
 
 export type RecordingUpdateResponse = {
@@ -75,7 +77,6 @@ export type RecordingUpdateResponse = {
 
 export type RecordingDeleteResponse = {
   success: boolean;
-  recording_id: string;
 };
 
 export type RecordingStartResponse = {
@@ -685,6 +686,16 @@ export async function fetchRecording(
     `/api/v1/recordings/${recordingId}`,
     { cache: "no-store" },
     "Recording request failed.",
+  );
+}
+
+export async function fetchPublicRecording(
+  recordingId: string,
+): Promise<RecordingItem> {
+  return requestJson<RecordingItem>(
+    `/api/v1/public/recordings/${recordingId}`,
+    { cache: "no-store" },
+    "This recording is unavailable.",
   );
 }
 

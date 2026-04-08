@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib import error, request
 
@@ -26,6 +26,14 @@ ALERT_PRIORITY = {"critical": 3, "warning": 2, "info": 1}
 MAX_ALERT_ITEMS = 3
 
 
+def _as_utc_aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _serialize_usage_metric(metric: Any) -> dict[str, Any]:
     return {
         "current": metric.current,
@@ -42,7 +50,7 @@ def _serialize_usage_metric(metric: Any) -> dict[str, Any]:
 def build_ai_snapshot(db: Session, current_user: User) -> dict[str, Any]:
     account = get_or_create_billing_account(db)
     usage = build_billing_usage_summary(db, account)
-    now = utc_now()
+    now = datetime.now(timezone.utc)
 
     if current_user.role == "teacher":
         teacher = get_teacher_by_email(db, current_user.email)
@@ -107,25 +115,36 @@ def build_ai_snapshot(db: Session, current_user: User) -> dict[str, Any]:
                 "status": classroom.status,
                 "live_status": latest_session.status if latest_session else "scheduled",
                 "is_full": student_count >= FULL_CLASS_THRESHOLD,
-                "last_session_at": latest_session.started_at.isoformat() if latest_session and latest_session.started_at else None,
+                "last_session_at": _as_utc_aware(latest_session.started_at).isoformat()
+                if latest_session and latest_session.started_at
+                else None,
             }
         )
 
     recent_session_cutoff = now - timedelta(days=7)
     recent_recording_cutoff = now - timedelta(days=7)
     recent_attendance_cutoff = now - timedelta(days=7)
+    recordings_expiry_cutoff = now + timedelta(days=2)
     recent_live_sessions = [
-        session for session in live_sessions if session.started_at and session.started_at >= recent_session_cutoff
+        session
+        for session in live_sessions
+        if (started_at := _as_utc_aware(session.started_at)) and started_at >= recent_session_cutoff
     ]
     recent_recordings = [
-        recording for recording in recordings if recording.created_at >= recent_recording_cutoff
+        recording
+        for recording in recordings
+        if (created_at := _as_utc_aware(recording.created_at)) and created_at >= recent_recording_cutoff
     ]
-    attendance_query = select(Attendance).where(Attendance.joined_at >= recent_attendance_cutoff)
-    if classes:
-        attendance_query = attendance_query.where(Attendance.class_id.in_([classroom.id for classroom in classes]))
+    attendance_query = select(Attendance)
+    if classrooms:
+        attendance_query = attendance_query.where(Attendance.class_id.in_([classroom.id for classroom in classrooms]))
     else:
         attendance_query = attendance_query.where(Attendance.class_id == "__none__")
-    recent_attendance = db.scalars(attendance_query).all()
+    recent_attendance = [
+        record
+        for record in db.scalars(attendance_query).all()
+        if (joined_at := _as_utc_aware(record.joined_at)) and joined_at >= recent_attendance_cutoff
+    ]
     sessions_with_attendance = {record.session_id for record in recent_attendance}
     avg_attendance_per_session = (
         round(len(recent_attendance) / len(sessions_with_attendance), 1)
@@ -133,7 +152,9 @@ def build_ai_snapshot(db: Session, current_user: User) -> dict[str, Any]:
         else 0.0
     )
     expiring_recordings = [
-        recording for recording in recordings if recording.expires_at <= now + timedelta(days=2)
+        recording
+        for recording in recordings
+        if (expires_at := _as_utc_aware(recording.expires_at)) and expires_at <= recordings_expiry_cutoff
     ]
 
     return {
@@ -703,5 +724,9 @@ def answer_ai_chat(db: Session, current_user: User, question: str) -> AIChatResp
 
 
 def get_ai_insights(db: Session, current_user: User) -> AIInsightsResponse:
-    snapshot = build_ai_snapshot(db, current_user)
-    return build_ai_insights_from_snapshot(snapshot)
+    try:
+        snapshot = build_ai_snapshot(db, current_user)
+        return build_ai_insights_from_snapshot(snapshot)
+    except Exception as exc:
+        logger.error("AI insights generation failed for %s: %s", current_user.email, exc, exc_info=True)
+        return _build_default_ai_insights(current_user.role)

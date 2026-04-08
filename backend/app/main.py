@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import api_router
+from app.api.routes import api_router, get_public_recording_by_id
 from app.config import (
     CORS_ORIGINS,
     ENV,
@@ -14,6 +14,7 @@ from app.config import (
 )
 from app.db import SessionLocal, engine
 from app.models import Base
+from app.schemas import RecordingItem
 from app.seed import seed_demo_data
 from app.services import cleanup_expired_recordings
 
@@ -61,6 +62,11 @@ def read_health() -> dict:
         "billing_configured": bool(STRIPE_SECRET_KEY),
         "ai_configured": bool(OPENAI_API_KEY),
     }
+
+
+@app.get("/public/recordings/{recording_id}", response_model=RecordingItem, tags=["public"])
+def get_public_recording_alias(recording_id: str) -> RecordingItem:
+    return get_public_recording_by_id(recording_id)
 
 
 app.include_router(api_router)
