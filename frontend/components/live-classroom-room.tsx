@@ -479,6 +479,11 @@ export function LiveClassroomRoom({
         const room = new Room({
           adaptiveStream: true,
           dynacast: true,
+          audioCaptureDefaults: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
         });
         roomRef.current = room;
 
@@ -552,7 +557,11 @@ export function LiveClassroomRoom({
 
         try {
           await room.localParticipant.setCameraEnabled(true);
-          await room.localParticipant.setMicrophoneEnabled(true);
+          await room.localParticipant.setMicrophoneEnabled(true, {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          });
         } catch (deviceError) {
           if (
             deviceError instanceof DOMException &&
