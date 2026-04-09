@@ -880,13 +880,10 @@ export function LiveClassroomRoom({
       : teacherStreamCard?.identity;
 
   return (
-    <motion.main
-      className="min-h-screen"
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, ease: "easeOut" }}
-    >
-      {/* ── Participants overlay — fixed above all content ──────────────── */}
+    <>
+      {/* ── Participants overlay — rendered OUTSIDE motion.main so that
+          framer-motion's transform on the parent cannot become a containing
+          block for these fixed-position children ──────────────────────── */}
       <AnimatePresence>
         {showParticipants ? (
           <>
@@ -1009,6 +1006,13 @@ export function LiveClassroomRoom({
           </>
         ) : null}
       </AnimatePresence>
+
+      <motion.main
+        className="min-h-screen"
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35, ease: "easeOut" }}
+      >
       <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 sm:py-6 lg:px-10">
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -1484,6 +1488,7 @@ export function LiveClassroomRoom({
           </div>
         </div>
       </div>
-    </motion.main>
+      </motion.main>
+    </>
   );
 }
