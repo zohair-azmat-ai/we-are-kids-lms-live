@@ -10,9 +10,11 @@ import { AnalyticsBarChart } from "@/components/analytics-bar-chart";
 import { AttendancePanel } from "@/components/attendance-panel";
 import { DashboardShell } from "@/components/dashboard-shell";
 import {
+  fetchLiveClasses,
   fetchRecordings,
   fetchTeacherAnalytics,
   startLiveClass,
+  type LiveClassSession,
   type RecordingItem,
   type TeacherAnalyticsResponse,
 } from "@/lib/api";
@@ -29,6 +31,7 @@ export default function TeacherDashboardPage() {
   const [analyticsError, setAnalyticsError] = useState("");
   const [isLoadingRecordings, setIsLoadingRecordings] = useState(true);
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(true);
+  const [liveSessions, setLiveSessions] = useState<LiveClassSession[]>([]);
 
   useEffect(() => {
     async function loadRecordings() {
@@ -63,8 +66,18 @@ export default function TeacherDashboardPage() {
       }
     }
 
+    async function loadLiveSessions() {
+      try {
+        const sessions = await fetchLiveClasses();
+        setLiveSessions(sessions);
+      } catch {
+        // Non-fatal — live sessions section just won't show
+      }
+    }
+
     void loadRecordings();
     void loadAnalytics();
+    void loadLiveSessions();
   }, []);
 
   async function handleStartLiveClass() {
@@ -138,6 +151,55 @@ export default function TeacherDashboardPage() {
           </button>
         </section>
       </div>
+
+      {liveSessions.length > 0 ? (
+        <section className="mt-6 rounded-[2rem] border border-emerald-100 bg-white p-6 shadow-soft">
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-600">
+            Live Now
+          </p>
+          <p className="mt-1 text-sm text-slate-500">
+            Active sessions you can join as a co-teacher.
+          </p>
+          <div className="mt-5 space-y-3">
+            {liveSessions.map((session) => {
+              const isOwnSession = user?.email === session.teacher_email;
+              return (
+                <div
+                  key={session.class_id}
+                  className="flex flex-col gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                      <p className="font-semibold text-slate-800">{session.title}</p>
+                      {isOwnSession ? (
+                        <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-600">
+                          Your class
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-600">
+                          Co-Teacher
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {session.teacher_name} · {session.participants_count} participant
+                      {session.participants_count !== 1 ? "s" : ""}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/teacher/classroom/${session.class_id}`)}
+                    className="inline-flex w-full items-center justify-center rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-600 sm:w-auto"
+                  >
+                    {isOwnSession ? "Rejoin Class" : "Join as Co-Teacher"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       {isLoadingAnalytics ? (
         <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">

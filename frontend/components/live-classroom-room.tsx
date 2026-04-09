@@ -87,6 +87,35 @@ function PhoneOffIcon({ className }: { className?: string }) {
   );
 }
 
+function HandIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 11V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2v0" />
+      <path d="M14 10V4a2 2 0 0 0-2-2 2 2 0 0 0-2 2v2" />
+      <path d="M10 10.5V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2v8" />
+      <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
+    </svg>
+  );
+}
+
+function ChatIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
+function MonitorIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+      <line x1="8" y1="21" x2="16" y2="21" />
+      <line x1="12" y1="17" x2="12" y2="21" />
+    </svg>
+  );
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 type ClassroomRole = Extract<UserRole, "teacher" | "student">;
@@ -104,6 +133,15 @@ type ParticipantCard = {
   isTeacher: boolean;
   micEnabled: boolean;
   cameraEnabled: boolean;
+};
+
+type ChatMessage = {
+  id: string;
+  senderIdentity: string;
+  senderName: string;
+  text: string;
+  timestamp: number;
+  isTeacher: boolean;
 };
 
 // ─── Animation variants ─────────────────────────────────────────────────────
@@ -182,6 +220,18 @@ export function LiveClassroomRoom({
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [activeSpeakerIdentities, setActiveSpeakerIdentities] = useState<Set<string>>(new Set());
   const [showParticipants, setShowParticipants] = useState(false);
+  // Raise hand
+  const [handRaisedByMe, setHandRaisedByMe] = useState(false);
+  const [raisedHands, setRaisedHands] = useState<Map<string, string>>(new Map()); // identity → name
+  // Chat
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [showChat, setShowChat] = useState(false);
+  const [unreadChat, setUnreadChat] = useState(0);
+  // Screen share
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [screenShareStream, setScreenShareStream] = useState<MediaStream | null>(null);
+  const [remoteScreenShareStream, setRemoteScreenShareStream] = useState<MediaStream | null>(null);
 
   const roomRef = useRef<Room | null>(null);
   const classroomRef = useRef<LiveClassSession | null>(null);
@@ -195,10 +245,23 @@ export function LiveClassroomRoom({
   const pendingStopResolveRef = useRef<(() => void) | null>(null);
   const recordingSessionIdRef = useRef<string | null>(null);
   const audioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   const dashboardPath =
     role === "teacher" ? "/teacher/dashboard" : "/student/dashboard";
-  const titlePrefix = role === "teacher" ? "Teacher Classroom" : "Student Classroom";
+
+  // True when a teacher joins a class they did not start (co-teacher)
+  const isCoTeacher =
+    role === "teacher" &&
+    !!session &&
+    !!classroom &&
+    session.email !== classroom.teacher_email;
+
+  const titlePrefix = role !== "teacher"
+    ? "Student Classroom"
+    : isCoTeacher
+      ? "Co-Teacher Classroom"
+      : "Teacher Classroom";
 
   usePageTitle(
     classroom ? `${titlePrefix} - ${classroom.title}` : `${titlePrefix} Loading`,
@@ -629,6 +692,11 @@ export function LiveClassroomRoom({
               });
               document.body.appendChild(audioEl);
               audioElementsRef.current.set(track.sid, audioEl);
+            } else if (
+              track.source === Track.Source.ScreenShare &&
+              track.mediaStreamTrack
+            ) {
+              setRemoteScreenShareStream(new MediaStream([track.mediaStreamTrack]));
             }
             syncRoomState(room, classroomRef.current);
           })
@@ -640,13 +708,26 @@ export function LiveClassroomRoom({
                 audioEl.remove();
                 audioElementsRef.current.delete(track.sid);
               }
+            } else if (track.source === Track.Source.ScreenShare) {
+              setRemoteScreenShareStream(null);
             }
             syncRoomState(room, classroomRef.current);
           })
-          .on(RoomEvent.LocalTrackPublished, () => {
+          .on(RoomEvent.LocalTrackPublished, (publication) => {
+            if (
+              publication.source === Track.Source.ScreenShare &&
+              publication.track?.mediaStreamTrack
+            ) {
+              setScreenShareStream(new MediaStream([publication.track.mediaStreamTrack]));
+              setIsScreenSharing(true);
+            }
             syncRoomState(room, classroomRef.current);
           })
-          .on(RoomEvent.LocalTrackUnpublished, () => {
+          .on(RoomEvent.LocalTrackUnpublished, (publication) => {
+            if (publication.source === Track.Source.ScreenShare) {
+              setScreenShareStream(null);
+              setIsScreenSharing(false);
+            }
             syncRoomState(room, classroomRef.current);
           })
           .on(RoomEvent.TrackMuted, () => {
@@ -657,15 +738,36 @@ export function LiveClassroomRoom({
           })
           .on(RoomEvent.DataReceived, (payload: Uint8Array) => {
             try {
-              const parsed = JSON.parse(new TextDecoder().decode(payload)) as {
-                type?: string;
-                message?: string;
-              };
+              const parsed = JSON.parse(new TextDecoder().decode(payload)) as Record<string, unknown>;
 
               if (parsed.type === "room-ended") {
                 handleRemoteRoomEnded(
-                  parsed.message ?? "The teacher ended this class session.",
+                  (parsed.message as string | undefined) ?? "The teacher ended this class session.",
                 );
+              } else if (parsed.type === "raise-hand") {
+                const identity = parsed.identity as string;
+                const name = parsed.name as string;
+                const raised = parsed.raised as boolean;
+                setRaisedHands((prev) => {
+                  const next = new Map(prev);
+                  if (raised) {
+                    next.set(identity, name);
+                  } else {
+                    next.delete(identity);
+                  }
+                  return next;
+                });
+              } else if (parsed.type === "chat") {
+                const msg: ChatMessage = {
+                  id: parsed.id as string,
+                  senderIdentity: parsed.senderIdentity as string,
+                  senderName: parsed.senderName as string,
+                  text: parsed.text as string,
+                  timestamp: parsed.timestamp as number,
+                  isTeacher: parsed.isTeacher as boolean,
+                };
+                setChatMessages((prev) => [...prev, msg]);
+                setUnreadChat((n) => n + 1);
               }
             } catch {
               return;
@@ -763,6 +865,100 @@ export function LiveClassroomRoom({
     };
   }, [classId, role, router, user, isAuthLoading]);
 
+  // Auto-scroll chat to bottom on new messages
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
+
+  // Reset unread count when chat panel is opened
+  useEffect(() => {
+    if (showChat) {
+      setUnreadChat(0);
+    }
+  }, [showChat]);
+
+  async function toggleRaiseHand() {
+    if (!roomRef.current || !session) {
+      return;
+    }
+
+    const nextRaised = !handRaisedByMe;
+    setHandRaisedByMe(nextRaised);
+
+    // Update local raised hands map immediately so teacher sees own state
+    setRaisedHands((prev) => {
+      const next = new Map(prev);
+      if (nextRaised) {
+        next.set(session.email, session.name);
+      } else {
+        next.delete(session.email);
+      }
+      return next;
+    });
+
+    try {
+      const payload = new TextEncoder().encode(
+        JSON.stringify({
+          type: "raise-hand",
+          identity: session.email,
+          name: session.name,
+          raised: nextRaised,
+        }),
+      );
+      await roomRef.current.localParticipant.publishData(payload, { reliable: true });
+    } catch {
+      // Non-fatal — just revert local state
+      setHandRaisedByMe(!nextRaised);
+    }
+  }
+
+  async function sendChatMessage() {
+    if (!roomRef.current || !session || !chatInput.trim()) {
+      return;
+    }
+
+    const msg: ChatMessage = {
+      id: `${Date.now()}-${Math.random()}`,
+      senderIdentity: session.email,
+      senderName: session.name,
+      text: chatInput.trim(),
+      timestamp: Date.now(),
+      isTeacher: role === "teacher",
+    };
+
+    setChatMessages((prev) => [...prev, msg]);
+    setChatInput("");
+
+    try {
+      const payload = new TextEncoder().encode(JSON.stringify({ type: "chat", ...msg }));
+      await roomRef.current.localParticipant.publishData(payload, { reliable: true });
+    } catch {
+      // Message already added locally; remote delivery failed silently
+    }
+  }
+
+  async function toggleScreenShare() {
+    if (!roomRef.current) {
+      return;
+    }
+
+    try {
+      if (isScreenSharing) {
+        await roomRef.current.localParticipant.setScreenShareEnabled(false);
+        // State cleared via LocalTrackUnpublished event
+      } else {
+        await roomRef.current.localParticipant.setScreenShareEnabled(true);
+        // State set via LocalTrackPublished event
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "NotAllowedError") {
+        setDeviceMessage("Screen share permission was denied.");
+      } else {
+        setDeviceMessage("Screen sharing is not supported in this browser.");
+      }
+    }
+  }
+
   async function handleLeaveOrEndClass() {
     if (!session) {
       return;
@@ -779,10 +975,12 @@ export function LiveClassroomRoom({
     }
 
     try {
-      if (role === "teacher") {
+      if (role === "teacher" && !isCoTeacher) {
+        // Primary teacher: broadcast end-class to all and mark session ended
         await publishRoomEndedNotice();
         await endLiveClass(classId, session.email);
       } else {
+        // Co-teacher or student: just leave quietly
         await unregisterPresence();
       }
     } catch (requestError) {
@@ -860,18 +1058,326 @@ export function LiveClassroomRoom({
     );
   }
 
-  const mainTileIdentity =
-    role === "teacher"
-      ? studentTiles[0]?.identity
-      : teacherStreamCard?.identity;
+  // Active-speaker auto-focus: promote the speaking participant to the main tile
+  const focusedRemote = useMemo(() => {
+    if (remoteScreenShareStream || screenShareStream) {
+      return null; // screen share takes over the main tile
+    }
+    if (role === "teacher") {
+      const speaking = studentTiles.find((p) => activeSpeakerIdentities.has(p.identity));
+      return speaking ?? studentTiles[0] ?? null;
+    }
+    return teacherStreamCard ?? null;
+  }, [role, studentTiles, activeSpeakerIdentities, teacherStreamCard, remoteScreenShareStream, screenShareStream]);
+
+  const mainTileIdentity = focusedRemote?.identity;
 
   return (
-    <motion.main
-      className="min-h-screen"
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, ease: "easeOut" }}
-    >
+    <>
+      {/* ── Participants overlay — rendered OUTSIDE motion.main so that
+          framer-motion's transform on the parent cannot become a containing
+          block for these fixed-position children ──────────────────────── */}
+      <AnimatePresence>
+        {showParticipants ? (
+          <>
+            {/* Backdrop */}
+            <motion.div
+              key="participants-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
+              onClick={() => setShowParticipants(false)}
+            />
+
+            {/* Panel — bottom sheet on mobile, right side panel on sm+ */}
+            <motion.div
+              key="participants-overlay"
+              initial={{ y: "100%", opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: "100%", opacity: 0 }}
+              transition={{ type: "spring", stiffness: 320, damping: 32 }}
+              className="fixed inset-x-0 bottom-0 z-50 max-h-[80vh] overflow-y-auto rounded-t-[2rem] bg-white shadow-2xl sm:inset-x-auto sm:bottom-0 sm:right-0 sm:top-0 sm:h-full sm:max-h-full sm:w-[340px] sm:rounded-l-[2rem] sm:rounded-tr-none"
+            >
+              {/* Header */}
+              <div className="sticky top-0 z-10 flex items-center justify-between rounded-t-[2rem] border-b border-slate-100 bg-white px-6 py-5 sm:rounded-tl-[2rem] sm:rounded-tr-none">
+                <div>
+                  <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">
+                    Participants
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-400">
+                    {allParticipantsForPanel.length} in this session
+                  </p>
+                </div>
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.88 }}
+                  onClick={() => setShowParticipants(false)}
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700 transition-colors"
+                  aria-label="Close participants panel"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </motion.button>
+              </div>
+
+              {/* Participant rows */}
+              <div className="px-4 py-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+                {allParticipantsForPanel.length === 0 ? (
+                  <div className="flex flex-col items-center gap-3 py-12 text-center">
+                    <svg className="h-10 w-10 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                      <circle cx="9" cy="7" r="4" />
+                      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                    </svg>
+                    <p className="text-sm text-slate-500">No other participants yet.</p>
+                    <p className="text-xs text-slate-400">Share the class link to invite others.</p>
+                  </div>
+                ) : (
+                  <motion.ul
+                    variants={staggerContainer}
+                    initial="hidden"
+                    animate="visible"
+                    className="space-y-2"
+                  >
+                    {allParticipantsForPanel.map((participant) => {
+                      const isSpeaking = activeSpeakerIdentities.has(participant.identity);
+                      const hasHand = raisedHands.has(participant.identity);
+                      const showMic = participant.isLocal ? micEnabled : participant.micEnabled;
+                      const showCam = participant.isLocal ? cameraEnabled : participant.cameraEnabled;
+
+                      return (
+                        <motion.li
+                          key={participant.identity}
+                          variants={fadeUp}
+                          className={`flex items-center justify-between rounded-2xl border px-4 py-3 transition-colors ${
+                            hasHand
+                              ? "border-amber-200 bg-amber-50"
+                              : isSpeaking
+                                ? "border-green-200 bg-green-50"
+                                : "border-slate-100 bg-slate-50"
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span
+                              className={`h-2 w-2 shrink-0 rounded-full transition-colors ${
+                                isSpeaking ? "animate-pulse bg-green-500" : "bg-slate-300"
+                              }`}
+                            />
+                            <div className="min-w-0">
+                              <p className="flex items-center gap-1.5 truncate text-sm font-medium text-slate-800">
+                                {participant.name}
+                                {participant.isLocal ? (
+                                  <span className="text-xs font-normal text-slate-400">(You)</span>
+                                ) : null}
+                                <AnimatePresence>
+                                  {hasHand ? (
+                                    <motion.span
+                                      key="hand"
+                                      initial={{ scale: 0 }}
+                                      animate={{ scale: 1 }}
+                                      exit={{ scale: 0 }}
+                                    >
+                                      ✋
+                                    </motion.span>
+                                  ) : null}
+                                </AnimatePresence>
+                              </p>
+                              <p className={`text-xs ${isSpeaking ? "text-green-600" : hasHand ? "text-amber-600" : "text-slate-400"}`}>
+                                {isSpeaking
+                                  ? "Speaking..."
+                                  : hasHand
+                                    ? "Hand raised"
+                                    : participant.isTeacher
+                                      ? "Teacher"
+                                      : "Student"}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2 pl-3">
+                            {showMic
+                              ? <MicIcon className="h-4 w-4 text-emerald-500" />
+                              : <MicOffIcon className="h-4 w-4 text-red-400" />}
+                            {showCam
+                              ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
+                              : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
+                          </div>
+                        </motion.li>
+                      );
+                    })}
+                  </motion.ul>
+                )}
+              </div>
+            </motion.div>
+          </>
+        ) : null}
+      </AnimatePresence>
+
+      {/* ── Raised hands queue (teacher only, fixed overlay) ──────────────── */}
+      <AnimatePresence>
+        {role === "teacher" && raisedHands.size > 0 ? (
+          <motion.div
+            key="raised-hands"
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 24 }}
+            transition={{ type: "spring", stiffness: 300, damping: 28 }}
+            className="fixed bottom-6 left-4 z-50 w-64 rounded-[1.75rem] border border-amber-200 bg-amber-50 p-4 shadow-2xl sm:left-6"
+          >
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-700">
+              ✋ Raised Hands ({raisedHands.size})
+            </p>
+            <ul className="mt-3 space-y-2">
+              {Array.from(raisedHands.entries()).map(([identity, name]) => (
+                <li key={identity} className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm">
+                  <span className="text-base">✋</span>
+                  <span className="truncate">{name}</span>
+                </li>
+              ))}
+            </ul>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      {/* ── Chat panel (fixed overlay outside motion.main) ────────────────── */}
+      <AnimatePresence>
+        {showChat ? (
+          <>
+            <motion.div
+              key="chat-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm sm:hidden"
+              onClick={() => setShowChat(false)}
+            />
+            <motion.div
+              key="chat-panel"
+              initial={{ x: "100%", opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: "100%", opacity: 0 }}
+              transition={{ type: "spring", stiffness: 320, damping: 32 }}
+              className="fixed inset-y-0 right-0 z-50 flex w-full flex-col bg-white shadow-2xl sm:w-[360px] sm:rounded-l-[2rem]"
+            >
+              {/* Chat header */}
+              <div className="flex items-center justify-between border-b border-slate-100 px-6 py-5">
+                <div>
+                  <p className="text-sm font-semibold uppercase tracking-[0.24em] text-violet-600">
+                    Class Chat
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-400">{chatMessages.length} messages</p>
+                </div>
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.88 }}
+                  onClick={() => setShowChat(false)}
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200"
+                  aria-label="Close chat"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </motion.button>
+              </div>
+
+              {/* Messages */}
+              <div className="flex-1 overflow-y-auto px-4 py-4">
+                {chatMessages.length === 0 ? (
+                  <div className="flex flex-col items-center gap-3 py-16 text-center">
+                    <ChatIcon className="h-10 w-10 text-slate-300" />
+                    <p className="text-sm text-slate-500">No messages yet.</p>
+                    <p className="text-xs text-slate-400">Be the first to say something!</p>
+                  </div>
+                ) : (
+                  <motion.div
+                    variants={staggerContainer}
+                    initial="hidden"
+                    animate="visible"
+                    className="space-y-3"
+                  >
+                    {chatMessages.map((msg) => {
+                      const isOwn = msg.senderIdentity === session?.email;
+                      return (
+                        <motion.div
+                          key={msg.id}
+                          variants={fadeUp}
+                          className={`flex flex-col gap-1 ${isOwn ? "items-end" : "items-start"}`}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            {msg.isTeacher ? (
+                              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                                Teacher
+                              </span>
+                            ) : null}
+                            <span className="text-xs text-slate-400">{msg.senderName}</span>
+                          </div>
+                          <div
+                            className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${
+                              isOwn
+                                ? "bg-blue-600 text-white"
+                                : msg.isTeacher
+                                  ? "border border-blue-200 bg-blue-50 text-slate-800"
+                                  : "border border-slate-100 bg-slate-50 text-slate-700"
+                            }`}
+                          >
+                            {msg.text}
+                          </div>
+                          <span className="text-[10px] text-slate-400">
+                            {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </span>
+                        </motion.div>
+                      );
+                    })}
+                  </motion.div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              {/* Input */}
+              <div className="border-t border-slate-100 px-4 py-4">
+                <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2">
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        void sendChatMessage();
+                      }
+                    }}
+                    placeholder="Type a message…"
+                    className="flex-1 bg-transparent text-sm text-slate-800 placeholder-slate-400 outline-none"
+                  />
+                  <motion.button
+                    type="button"
+                    whileTap={{ scale: 0.88 }}
+                    onClick={() => void sendChatMessage()}
+                    disabled={!chatInput.trim()}
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white disabled:opacity-40"
+                  >
+                    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                    </svg>
+                  </motion.button>
+                </div>
+              </div>
+            </motion.div>
+          </>
+        ) : null}
+      </AnimatePresence>
+
+      <motion.main
+        className="min-h-screen"
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35, ease: "easeOut" }}
+      >
       <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 sm:py-6 lg:px-10">
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -895,11 +1401,16 @@ export function LiveClassroomRoom({
               <div className="inline-flex rounded-full bg-red-50 px-4 py-2 text-sm font-semibold text-red-600">
                 {classroom.status === "live" ? "Live" : classroom.status}
               </div>
+              {isCoTeacher ? (
+                <div className="inline-flex rounded-full bg-violet-100 px-4 py-2 text-sm font-semibold text-violet-700">
+                  Co-Teacher
+                </div>
+              ) : null}
               <div className="inline-flex rounded-full bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700">
                 {connectionState}
               </div>
               <AnimatePresence>
-                {role === "teacher" && isRecording ? (
+                {role === "teacher" && !isCoTeacher && isRecording ? (
                   <motion.div
                     key="rec-badge"
                     initial={{ opacity: 0, scale: 0.8 }}
@@ -1010,30 +1521,43 @@ export function LiveClassroomRoom({
               </div>
             </div>
 
-            {/* Main video tile */}
+            {/* Main video tile — screen share takes priority, then active speaker */}
             <div className="mt-6">
-              <VideoTile
-                stream={
-                  role === "teacher"
-                    ? studentTiles[0]?.stream ?? null
-                    : teacherStreamCard?.stream ?? null
-                }
-                title={
-                  role === "teacher"
-                    ? studentTiles[0]?.name ?? "Waiting for students"
-                    : teacherStreamCard?.name ?? classroom.teacher_name
-                }
-                subtitle={
-                  role === "teacher" ? "Student video" : "Teacher live stream"
-                }
-                priority
-                isSpeaking={
-                  mainTileIdentity
-                    ? activeSpeakerIdentities.has(mainTileIdentity)
-                    : false
-                }
-                className="min-h-[280px] sm:min-h-[360px] lg:min-h-[420px]"
-              />
+              {remoteScreenShareStream ?? screenShareStream ? (
+                <div className="overflow-hidden rounded-[2rem] bg-slate-900">
+                  <video
+                    autoPlay
+                    playsInline
+                    muted
+                    ref={(el) => {
+                      if (el) {
+                        el.srcObject = remoteScreenShareStream ?? screenShareStream;
+                      }
+                    }}
+                    className="h-full min-h-[280px] w-full object-contain sm:min-h-[360px] lg:min-h-[420px]"
+                  />
+                  <div className="bg-slate-800 px-4 py-2 text-center text-xs font-semibold text-slate-300">
+                    {isScreenSharing ? "You are sharing your screen" : "Screen share from presenter"}
+                  </div>
+                </div>
+              ) : (
+                <VideoTile
+                  stream={focusedRemote?.stream ?? null}
+                  title={focusedRemote?.name ?? (role === "teacher" ? "Waiting for students" : classroom.teacher_name)}
+                  subtitle={
+                    role === "teacher"
+                      ? focusedRemote
+                        ? activeSpeakerIdentities.has(focusedRemote.identity)
+                          ? "Speaking now"
+                          : "Student video"
+                        : "No students yet"
+                      : "Teacher live stream"
+                  }
+                  priority
+                  isSpeaking={mainTileIdentity ? activeSpeakerIdentities.has(mainTileIdentity) : false}
+                  className="min-h-[280px] sm:min-h-[360px] lg:min-h-[420px]"
+                />
+              )}
             </div>
 
             {/* ── Zoom-style control bar ────────────────────────────────── */}
@@ -1101,8 +1625,75 @@ export function LiveClassroomRoom({
                 <span className="text-[10px] font-medium leading-none">Participants</span>
               </motion.button>
 
-              {/* Record (teacher only) */}
+              {/* Chat */}
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.88 }}
+                whileHover={{ scale: 1.05 }}
+                transition={{ type: "spring", stiffness: 400, damping: 20 }}
+                onClick={() => setShowChat((prev) => !prev)}
+                title="Class chat"
+                className={`relative flex flex-col items-center gap-1 rounded-xl px-3 py-2 transition-colors ${
+                  showChat
+                    ? "bg-violet-100 text-violet-600"
+                    : "text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                <ChatIcon className="h-5 w-5" />
+                {unreadChat > 0 && !showChat ? (
+                  <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white">
+                    {unreadChat > 9 ? "9+" : unreadChat}
+                  </span>
+                ) : null}
+                <span className="text-[10px] font-medium leading-none">Chat</span>
+              </motion.button>
+
+              {/* Raise Hand (students) */}
+              {role === "student" ? (
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.88 }}
+                  whileHover={{ scale: 1.05 }}
+                  transition={{ type: "spring", stiffness: 400, damping: 20 }}
+                  onClick={() => void toggleRaiseHand()}
+                  title={handRaisedByMe ? "Lower hand" : "Raise hand"}
+                  className={`flex flex-col items-center gap-1 rounded-xl px-3 py-2 transition-colors ${
+                    handRaisedByMe
+                      ? "bg-amber-100 text-amber-700"
+                      : "text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  <HandIcon className="h-5 w-5" />
+                  <span className="text-[10px] font-medium leading-none">
+                    {handRaisedByMe ? "Lower Hand" : "Raise Hand"}
+                  </span>
+                </motion.button>
+              ) : null}
+
+              {/* Screen Share (teachers only) */}
               {role === "teacher" ? (
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.88 }}
+                  whileHover={{ scale: 1.05 }}
+                  transition={{ type: "spring", stiffness: 400, damping: 20 }}
+                  onClick={() => void toggleScreenShare()}
+                  title={isScreenSharing ? "Stop sharing" : "Share screen"}
+                  className={`flex flex-col items-center gap-1 rounded-xl px-3 py-2 transition-colors ${
+                    isScreenSharing
+                      ? "bg-sky-100 text-sky-700"
+                      : "text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  <MonitorIcon className="h-5 w-5" />
+                  <span className="text-[10px] font-medium leading-none">
+                    {isScreenSharing ? "Stop Share" : "Share"}
+                  </span>
+                </motion.button>
+              ) : null}
+
+              {/* Record (primary teacher only — not co-teacher) */}
+              {role === "teacher" && !isCoTeacher ? (
                 <motion.button
                   type="button"
                   whileTap={{ scale: 0.88 }}
@@ -1148,7 +1739,7 @@ export function LiveClassroomRoom({
               >
                 <PhoneOffIcon className="h-5 w-5" />
                 <span className="text-[10px] font-medium leading-none">
-                  {role === "teacher" ? "End Class" : "Leave"}
+                  {role === "teacher" && !isCoTeacher ? "End Class" : "Leave"}
                 </span>
               </motion.button>
             </div>
@@ -1234,30 +1825,50 @@ export function LiveClassroomRoom({
                     </motion.div>
                   ) : null}
                   {studentTiles.length ? (
-                    studentTiles.map((participant) => (
-                      <motion.div
-                        key={participant.identity}
-                        variants={fadeUp}
-                        className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3"
-                      >
-                        <div className="flex items-center gap-2">
-                          {activeSpeakerIdentities.has(participant.identity) ? (
-                            <span className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
-                          ) : (
-                            <span className="h-2 w-2 rounded-full bg-slate-300" />
-                          )}
-                          <span className="text-sm text-slate-700">{participant.name}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {participant.micEnabled
-                            ? <MicIcon className="h-4 w-4 text-emerald-500" />
-                            : <MicOffIcon className="h-4 w-4 text-red-400" />}
-                          {participant.cameraEnabled
-                            ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
-                            : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
-                        </div>
-                      </motion.div>
-                    ))
+                    studentTiles.map((participant) => {
+                      const hasHandRaised = raisedHands.has(participant.identity);
+                      return (
+                        <motion.div
+                          key={participant.identity}
+                          variants={fadeUp}
+                          className={`flex items-center justify-between rounded-2xl border px-4 py-3 ${
+                            hasHandRaised
+                              ? "border-amber-200 bg-amber-50"
+                              : "border-slate-100 bg-slate-50"
+                          }`}
+                        >
+                          <div className="flex min-w-0 items-center gap-2">
+                            {activeSpeakerIdentities.has(participant.identity) ? (
+                              <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-green-500" />
+                            ) : (
+                              <span className="h-2 w-2 shrink-0 rounded-full bg-slate-300" />
+                            )}
+                            <span className="truncate text-sm text-slate-700">{participant.name}</span>
+                            <AnimatePresence>
+                              {hasHandRaised ? (
+                                <motion.span
+                                  key="hand"
+                                  initial={{ scale: 0, opacity: 0 }}
+                                  animate={{ scale: 1, opacity: 1 }}
+                                  exit={{ scale: 0, opacity: 0 }}
+                                  className="shrink-0 text-base"
+                                >
+                                  ✋
+                                </motion.span>
+                              ) : null}
+                            </AnimatePresence>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2 pl-2">
+                            {participant.micEnabled
+                              ? <MicIcon className="h-4 w-4 text-emerald-500" />
+                              : <MicOffIcon className="h-4 w-4 text-red-400" />}
+                            {participant.cameraEnabled
+                              ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
+                              : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
+                          </div>
+                        </motion.div>
+                      );
+                    })
                   ) : (
                     <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
                       Students will appear here after they join the room.
@@ -1323,129 +1934,26 @@ export function LiveClassroomRoom({
               </div>
             </motion.section>
 
-            {/* Participants panel / Classroom Notes — animated swap */}
-            <AnimatePresence mode="wait">
-              {showParticipants ? (
-                <motion.section
-                  key="participants-panel"
-                  variants={panelVariants}
-                  initial="hidden"
-                  animate="visible"
-                  exit="exit"
-                  className="rounded-[2rem] border border-blue-100 bg-white p-6 shadow-soft"
-                >
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">
-                      All Participants ({allParticipantsForPanel.length})
-                    </p>
-                    <motion.button
-                      type="button"
-                      whileTap={{ scale: 0.9 }}
-                      onClick={() => setShowParticipants(false)}
-                      className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
-                      title="Close participants panel"
-                    >
-                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="18" y1="6" x2="6" y2="18" />
-                        <line x1="6" y1="6" x2="18" y2="18" />
-                      </svg>
-                    </motion.button>
-                  </div>
-                  <motion.div
-                    variants={staggerContainer}
-                    initial="hidden"
-                    animate="visible"
-                    className="mt-4 space-y-2"
-                  >
-                    {allParticipantsForPanel.map((participant) => {
-                      const isSpeaking = activeSpeakerIdentities.has(participant.identity);
-                      return (
-                        <motion.div
-                          key={participant.identity}
-                          variants={fadeUp}
-                          className={`flex items-center justify-between rounded-2xl border px-4 py-3 transition-colors ${
-                            isSpeaking
-                              ? "border-green-200 bg-green-50"
-                              : "border-slate-100 bg-slate-50"
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5">
-                            <span
-                              className={`h-2 w-2 rounded-full transition-colors ${
-                                isSpeaking ? "animate-pulse bg-green-500" : "bg-slate-300"
-                              }`}
-                            />
-                            <div>
-                              <p className="text-sm font-medium text-slate-800">
-                                {participant.name}
-                                {participant.isLocal ? (
-                                  <span className="ml-1.5 text-xs font-normal text-slate-400">(You)</span>
-                                ) : null}
-                              </p>
-                              {isSpeaking ? (
-                                <p className="text-xs text-green-600">Speaking...</p>
-                              ) : (
-                                <p className="text-xs text-slate-400">
-                                  {participant.isTeacher ? "Teacher" : "Student"}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {participant.isLocal ? (
-                              <>
-                                {micEnabled
-                                  ? <MicIcon className="h-4 w-4 text-emerald-500" />
-                                  : <MicOffIcon className="h-4 w-4 text-red-400" />}
-                                {cameraEnabled
-                                  ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
-                                  : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
-                              </>
-                            ) : (
-                              <>
-                                {participant.micEnabled
-                                  ? <MicIcon className="h-4 w-4 text-emerald-500" />
-                                  : <MicOffIcon className="h-4 w-4 text-red-400" />}
-                                {participant.cameraEnabled
-                                  ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
-                                  : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
-                              </>
-                            )}
-                          </div>
-                        </motion.div>
-                      );
-                    })}
-                  </motion.div>
-                </motion.section>
-              ) : (
-                <motion.section
-                  key="classroom-notes"
-                  variants={notesVariants}
-                  initial="hidden"
-                  animate="visible"
-                  exit="exit"
-                  className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft"
-                >
-                  <p className="text-sm font-semibold uppercase tracking-[0.24em] text-red-500">
-                    Classroom Notes
-                  </p>
-                  <div className="mt-5 space-y-3">
-                    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
-                      LiveKit is handling the room connection for a more stable classroom session.
-                    </div>
-                    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
-                      Recordings still save through the existing LMS upload workflow.
-                    </div>
-                    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
-                      Room name: {classId}
-                    </div>
-                  </div>
-                </motion.section>
-              )}
-            </AnimatePresence>
+            <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-red-500">
+                Classroom Notes
+              </p>
+              <div className="mt-5 space-y-3">
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
+                  LiveKit is handling the room connection for a more stable classroom session.
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
+                  Recordings still save through the existing LMS upload workflow.
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
+                  Room name: {classId}
+                </div>
+              </div>
+            </section>
           </div>
         </div>
       </div>
-    </motion.main>
+      </motion.main>
+    </>
   );
 }
