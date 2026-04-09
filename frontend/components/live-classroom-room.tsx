@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ConnectionState, Participant, Room, RoomEvent, Track } from "livekit-client";
+import { ConnectionState, Participant, RemoteTrack, Room, RoomEvent, Track } from "livekit-client";
 
 import { useAuth } from "@/components/auth-provider";
 import { LoadingPanel, Spinner } from "@/components/ui-state";
@@ -82,6 +82,7 @@ export function LiveClassroomRoom({
   const [isUploadingRecording, setIsUploadingRecording] = useState(false);
   const [recordingError, setRecordingError] = useState("");
   const [recordingSuccess, setRecordingSuccess] = useState("");
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
 
   const roomRef = useRef<Room | null>(null);
   const classroomRef = useRef<LiveClassSession | null>(null);
@@ -94,6 +95,7 @@ export function LiveClassroomRoom({
   const recordingChunksRef = useRef<Blob[]>([]);
   const pendingStopResolveRef = useRef<(() => void) | null>(null);
   const recordingSessionIdRef = useRef<string | null>(null);
+  const audioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
 
   const dashboardPath =
     role === "teacher" ? "/teacher/dashboard" : "/student/dashboard";
@@ -513,10 +515,28 @@ export function LiveClassroomRoom({
           .on(RoomEvent.ParticipantDisconnected, () => {
             syncRoomState(room, classroomRef.current);
           })
-          .on(RoomEvent.TrackSubscribed, () => {
+          .on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
+            if (track.kind === Track.Kind.Audio && track.mediaStreamTrack && track.sid) {
+              const audioEl = document.createElement("audio");
+              audioEl.srcObject = new MediaStream([track.mediaStreamTrack]);
+              audioEl.autoplay = true;
+              void audioEl.play().catch(() => {
+                // Autoplay blocked — user must tap "Enable Audio"
+              });
+              document.body.appendChild(audioEl);
+              audioElementsRef.current.set(track.sid, audioEl);
+            }
             syncRoomState(room, classroomRef.current);
           })
-          .on(RoomEvent.TrackUnsubscribed, () => {
+          .on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
+            if (track.kind === Track.Kind.Audio && track.sid) {
+              const audioEl = audioElementsRef.current.get(track.sid);
+              if (audioEl) {
+                audioEl.srcObject = null;
+                audioEl.remove();
+                audioElementsRef.current.delete(track.sid);
+              }
+            }
             syncRoomState(room, classroomRef.current);
           })
           .on(RoomEvent.LocalTrackPublished, () => {
@@ -561,6 +581,12 @@ export function LiveClassroomRoom({
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
+          });
+          // Ensure all local audio tracks are active (not silenced)
+          room.localParticipant.audioTrackPublications.forEach((pub) => {
+            if (pub.track?.isMuted) {
+              void pub.track.unmute();
+            }
           });
         } catch (deviceError) {
           if (
@@ -620,6 +646,12 @@ export function LiveClassroomRoom({
 
         await unregisterPresence();
       })();
+
+      audioElementsRef.current.forEach((audioEl) => {
+        audioEl.srcObject = null;
+        audioEl.remove();
+      });
+      audioElementsRef.current.clear();
 
       if (roomRef.current) {
         roomRef.current.disconnect();
@@ -772,6 +804,28 @@ export function LiveClassroomRoom({
         {deviceMessage ? (
           <div className="mt-6 rounded-[1.5rem] border border-red-100 bg-red-50 px-5 py-4 text-sm text-red-600">
             {deviceMessage}
+          </div>
+        ) : null}
+
+        {!audioUnlocked && connectionState === "connected" ? (
+          <div className="mt-6 rounded-[1.5rem] border border-blue-100 bg-blue-50 px-5 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-blue-700">
+                Tap "Enable Audio" to hear participants (required on mobile).
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  audioElementsRef.current.forEach((audioEl) => {
+                    void audioEl.play().catch(() => {});
+                  });
+                  setAudioUnlocked(true);
+                }}
+                className="shrink-0 rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white"
+              >
+                Enable Audio
+              </button>
+            </div>
           </div>
         ) : null}
 
