@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConnectionState, Participant, RemoteTrack, Room, RoomEvent, Track } from "livekit-client";
+import { AnimatePresence, motion } from "framer-motion";
 
 import { useAuth } from "@/components/auth-provider";
 import { LoadingPanel, Spinner } from "@/components/ui-state";
@@ -22,7 +23,7 @@ import {
   type LiveClassSession,
 } from "@/lib/api";
 
-// ─── Inline SVG icons (no external dependency) ──────────────────────────────
+// ─── Inline SVG icons ───────────────────────────────────────────────────────
 
 function MicIcon({ className }: { className?: string }) {
   return (
@@ -103,6 +104,30 @@ type ParticipantCard = {
   isTeacher: boolean;
   micEnabled: boolean;
   cameraEnabled: boolean;
+};
+
+// ─── Animation variants ─────────────────────────────────────────────────────
+
+const fadeUp = {
+  hidden: { opacity: 0, y: 16 },
+  visible: { opacity: 1, y: 0 },
+};
+
+const staggerContainer = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.07 } },
+};
+
+const panelVariants = {
+  hidden: { opacity: 0, x: 32 },
+  visible: { opacity: 1, x: 0, transition: { type: "spring" as const, stiffness: 320, damping: 28 } },
+  exit: { opacity: 0, x: 32 },
+};
+
+const notesVariants = {
+  hidden: { opacity: 0 },
+  visible: { opacity: 1 },
+  exit: { opacity: 0 },
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -292,7 +317,7 @@ export function LiveClassroomRoom({
         try {
           await stopRecordingSession({ recordingId: sessionId });
         } catch {
-          // stopRecordingSession failing is non-fatal — the entry already exists in DB.
+          // stopRecordingSession failing is non-fatal.
         }
       }
 
@@ -661,7 +686,6 @@ export function LiveClassroomRoom({
             noiseSuppression: true,
             autoGainControl: true,
           });
-          // Ensure all local audio tracks are active (not silenced)
           room.localParticipant.audioTrackPublications.forEach((pub) => {
             if (pub.track?.isMuted) {
               void pub.track.unmute();
@@ -842,11 +866,21 @@ export function LiveClassroomRoom({
       : teacherStreamCard?.identity;
 
   return (
-    <main className="min-h-screen">
+    <motion.main
+      className="min-h-screen"
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, ease: "easeOut" }}
+    >
       <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 sm:py-6 lg:px-10">
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
-        <header className="rounded-[2rem] border border-slate-100 bg-white px-5 py-5 shadow-soft sm:px-6">
+        <motion.header
+          variants={fadeUp}
+          initial="hidden"
+          animate="visible"
+          className="rounded-[2rem] border border-slate-100 bg-white px-5 py-5 shadow-soft sm:px-6"
+        >
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <p className="text-sm font-semibold uppercase tracking-[0.28em] text-blue-600">
@@ -864,12 +898,20 @@ export function LiveClassroomRoom({
               <div className="inline-flex rounded-full bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700">
                 {connectionState}
               </div>
-              {role === "teacher" && isRecording ? (
-                <div className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-4 py-2 text-sm font-semibold text-amber-800">
-                  <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
-                  Recording
-                </div>
-              ) : null}
+              <AnimatePresence>
+                {role === "teacher" && isRecording ? (
+                  <motion.div
+                    key="rec-badge"
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-4 py-2 text-sm font-semibold text-amber-800"
+                  >
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                    Recording
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
               {role === "teacher" && isUploadingRecording ? (
                 <div className="inline-flex rounded-full bg-blue-100 px-4 py-2 text-sm font-semibold text-blue-700">
                   Uploading Recording
@@ -880,48 +922,78 @@ export function LiveClassroomRoom({
               </div>
             </div>
           </div>
-        </header>
+        </motion.header>
 
         {/* ── Banners ─────────────────────────────────────────────────────── */}
-        {statusMessage ? (
-          <div className="mt-4 rounded-[1.5rem] border border-amber-100 bg-amber-50 px-5 py-4 text-sm text-amber-700">
-            {statusMessage}
-          </div>
-        ) : null}
+        <AnimatePresence>
+          {statusMessage ? (
+            <motion.div
+              key="status-banner"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="mt-4 rounded-[1.5rem] border border-amber-100 bg-amber-50 px-5 py-4 text-sm text-amber-700"
+            >
+              {statusMessage}
+            </motion.div>
+          ) : null}
 
-        {deviceMessage ? (
-          <div className="mt-4 rounded-[1.5rem] border border-red-100 bg-red-50 px-5 py-4 text-sm text-red-600">
-            {deviceMessage}
-          </div>
-        ) : null}
+          {deviceMessage ? (
+            <motion.div
+              key="device-banner"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="mt-4 rounded-[1.5rem] border border-red-100 bg-red-50 px-5 py-4 text-sm text-red-600"
+            >
+              {deviceMessage}
+            </motion.div>
+          ) : null}
 
-        {!audioUnlocked && connectionState === "connected" ? (
-          <div className="mt-4 rounded-[1.5rem] border border-blue-100 bg-blue-50 px-5 py-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm text-blue-700">
-                Tap "Enable Audio" to hear participants (required on mobile).
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  audioElementsRef.current.forEach((audioEl) => {
-                    void audioEl.play().catch(() => {});
-                  });
-                  setAudioUnlocked(true);
-                }}
-                className="shrink-0 rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white"
-              >
-                Enable Audio
-              </button>
-            </div>
-          </div>
-        ) : null}
+          {!audioUnlocked && connectionState === "connected" ? (
+            <motion.div
+              key="audio-banner"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="mt-4 rounded-[1.5rem] border border-blue-100 bg-blue-50 px-5 py-4"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-blue-700">
+                  Tap "Enable Audio" to hear participants (required on mobile).
+                </p>
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => {
+                    audioElementsRef.current.forEach((audioEl) => {
+                      void audioEl.play().catch(() => {});
+                    });
+                    setAudioUnlocked(true);
+                  }}
+                  className="shrink-0 rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white"
+                >
+                  Enable Audio
+                </motion.button>
+              </div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
 
         {/* ── Main grid ───────────────────────────────────────────────────── */}
         <div className="mt-6 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
 
           {/* ── Left: main video + control bar ─────────────────────────── */}
-          <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+          <motion.section
+            variants={fadeUp}
+            initial="hidden"
+            animate="visible"
+            transition={{ delay: 0.05 } as never}
+            className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft"
+          >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm text-slate-500">
@@ -968,8 +1040,11 @@ export function LiveClassroomRoom({
             <div className="mt-6 flex flex-wrap items-center justify-center gap-1 rounded-2xl border border-slate-100 bg-white/80 px-3 py-3 shadow-soft backdrop-blur-sm sm:gap-2">
 
               {/* Mic */}
-              <button
+              <motion.button
                 type="button"
+                whileTap={{ scale: 0.88 }}
+                whileHover={{ scale: 1.05 }}
+                transition={{ type: "spring", stiffness: 400, damping: 20 }}
                 onClick={() => void toggleMic()}
                 title={micEnabled ? "Mute microphone" : "Unmute microphone"}
                 className={`flex flex-col items-center gap-1 rounded-xl px-3 py-2 transition-colors ${
@@ -984,11 +1059,14 @@ export function LiveClassroomRoom({
                 <span className="text-[10px] font-medium leading-none">
                   {micEnabled ? "Mute" : "Unmute"}
                 </span>
-              </button>
+              </motion.button>
 
               {/* Camera */}
-              <button
+              <motion.button
                 type="button"
+                whileTap={{ scale: 0.88 }}
+                whileHover={{ scale: 1.05 }}
+                transition={{ type: "spring", stiffness: 400, damping: 20 }}
                 onClick={() => void toggleCamera()}
                 title={cameraEnabled ? "Stop video" : "Start video"}
                 className={`flex flex-col items-center gap-1 rounded-xl px-3 py-2 transition-colors ${
@@ -1003,11 +1081,14 @@ export function LiveClassroomRoom({
                 <span className="text-[10px] font-medium leading-none">
                   {cameraEnabled ? "Stop Video" : "Start Video"}
                 </span>
-              </button>
+              </motion.button>
 
               {/* Participants toggle */}
-              <button
+              <motion.button
                 type="button"
+                whileTap={{ scale: 0.88 }}
+                whileHover={{ scale: 1.05 }}
+                transition={{ type: "spring", stiffness: 400, damping: 20 }}
                 onClick={() => setShowParticipants((prev) => !prev)}
                 title="Show participants"
                 className={`flex flex-col items-center gap-1 rounded-xl px-3 py-2 transition-colors ${
@@ -1018,12 +1099,15 @@ export function LiveClassroomRoom({
               >
                 <UsersIcon className="h-5 w-5" />
                 <span className="text-[10px] font-medium leading-none">Participants</span>
-              </button>
+              </motion.button>
 
               {/* Record (teacher only) */}
               {role === "teacher" ? (
-                <button
+                <motion.button
                   type="button"
+                  whileTap={{ scale: 0.88 }}
+                  whileHover={{ scale: 1.05 }}
+                  transition={{ type: "spring", stiffness: 400, damping: 20 }}
                   onClick={isRecording ? () => void stopRecording() : () => void startRecording()}
                   disabled={isUploadingRecording}
                   title={isRecording ? "Stop recording" : "Start recording"}
@@ -1047,37 +1131,53 @@ export function LiveClassroomRoom({
                   <span className="text-[10px] font-medium leading-none">
                     {isRecording ? "Stop Rec" : "Record"}
                   </span>
-                </button>
+                </motion.button>
               ) : null}
 
               <div className="mx-1 h-8 w-px bg-slate-200" />
 
               {/* End / Leave */}
-              <button
+              <motion.button
                 type="button"
+                whileTap={{ scale: 0.88 }}
+                whileHover={{ scale: 1.05, boxShadow: "0 4px 16px rgba(239,68,68,0.35)" }}
+                transition={{ type: "spring", stiffness: 400, damping: 20 }}
                 onClick={handleLeaveOrEndClass}
                 title={role === "teacher" ? "End class for everyone" : "Leave class"}
-                className="flex flex-col items-center gap-1 rounded-xl bg-red-500 px-3 py-2 text-white shadow-sm transition-colors hover:bg-red-600"
+                className="flex flex-col items-center gap-1 rounded-xl bg-red-500 px-3 py-2 text-white shadow-sm transition-colors"
               >
                 <PhoneOffIcon className="h-5 w-5" />
                 <span className="text-[10px] font-medium leading-none">
                   {role === "teacher" ? "End Class" : "Leave"}
                 </span>
-              </button>
+              </motion.button>
             </div>
 
-            {/* Recording status messages */}
-            {role === "teacher" && recordingError ? (
-              <div className="mt-4 rounded-[1.25rem] border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
-                {recordingError}
-              </div>
-            ) : null}
-
-            {role === "teacher" && recordingSuccess ? (
-              <div className="mt-4 rounded-[1.25rem] border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-                {recordingSuccess}
-              </div>
-            ) : null}
+            {/* Recording status */}
+            <AnimatePresence>
+              {role === "teacher" && recordingError ? (
+                <motion.div
+                  key="rec-error"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 6 }}
+                  className="mt-4 rounded-[1.25rem] border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600"
+                >
+                  {recordingError}
+                </motion.div>
+              ) : null}
+              {role === "teacher" && recordingSuccess ? (
+                <motion.div
+                  key="rec-success"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 6 }}
+                  className="mt-4 rounded-[1.25rem] border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+                >
+                  {recordingSuccess}
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
 
             {remoteParticipants.length === 0 ? (
               <div className="mt-4 rounded-[1.25rem] border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-600">
@@ -1086,21 +1186,35 @@ export function LiveClassroomRoom({
                   : "Waiting for the teacher or classmates to appear in the room."}
               </div>
             ) : null}
-          </section>
+          </motion.section>
 
           {/* ── Right sidebar ───────────────────────────────────────────── */}
           <div className="grid gap-6">
 
             {/* Self view / teacher participant list */}
-            <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+            <motion.section
+              variants={fadeUp}
+              initial="hidden"
+              animate="visible"
+              transition={{ delay: 0.1 } as never}
+              className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft"
+            >
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">
                 {role === "teacher" ? "Participants" : "Self View"}
               </p>
 
               {role === "teacher" ? (
-                <div className="mt-5 space-y-3">
+                <motion.div
+                  variants={staggerContainer}
+                  initial="hidden"
+                  animate="visible"
+                  className="mt-5 space-y-3"
+                >
                   {localParticipantCard ? (
-                    <div className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                    <motion.div
+                      variants={fadeUp}
+                      className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3"
+                    >
                       <div className="flex items-center gap-2">
                         {activeSpeakerIdentities.has(localParticipantCard.identity) ? (
                           <span className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
@@ -1117,12 +1231,13 @@ export function LiveClassroomRoom({
                           ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
                           : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
                       </div>
-                    </div>
+                    </motion.div>
                   ) : null}
                   {studentTiles.length ? (
                     studentTiles.map((participant) => (
-                      <div
+                      <motion.div
                         key={participant.identity}
+                        variants={fadeUp}
                         className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3"
                       >
                         <div className="flex items-center gap-2">
@@ -1141,14 +1256,14 @@ export function LiveClassroomRoom({
                             ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
                             : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
                         </div>
-                      </div>
+                      </motion.div>
                     ))
                   ) : (
                     <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
                       Students will appear here after they join the room.
                     </div>
                   )}
-                </div>
+                </motion.div>
               ) : (
                 <div className="mt-5">
                   <VideoTile
@@ -1161,10 +1276,16 @@ export function LiveClassroomRoom({
                   />
                 </div>
               )}
-            </section>
+            </motion.section>
 
             {/* Video tiles */}
-            <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+            <motion.section
+              variants={fadeUp}
+              initial="hidden"
+              animate="visible"
+              transition={{ delay: 0.15 } as never}
+              className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft"
+            >
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-sky-600">
                 {role === "teacher" ? "Student Tiles" : "Classroom Tiles"}
               </p>
@@ -1190,113 +1311,141 @@ export function LiveClassroomRoom({
                   />
                 ))}
                 {!remoteParticipants.length ? (
-                  <div className="rounded-[1.5rem] border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.3 }}
+                    className="rounded-[1.5rem] border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600"
+                  >
                     Participant video tiles will appear here when others join the room.
-                  </div>
+                  </motion.div>
                 ) : null}
               </div>
-            </section>
+            </motion.section>
 
-            {/* Participants panel (toggled by control bar) */}
-            {showParticipants ? (
-              <section className="rounded-[2rem] border border-blue-100 bg-white p-6 shadow-soft">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">
-                    All Participants ({allParticipantsForPanel.length})
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setShowParticipants(false)}
-                    className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                    title="Close participants panel"
+            {/* Participants panel / Classroom Notes — animated swap */}
+            <AnimatePresence mode="wait">
+              {showParticipants ? (
+                <motion.section
+                  key="participants-panel"
+                  variants={panelVariants}
+                  initial="hidden"
+                  animate="visible"
+                  exit="exit"
+                  className="rounded-[2rem] border border-blue-100 bg-white p-6 shadow-soft"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">
+                      All Participants ({allParticipantsForPanel.length})
+                    </p>
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.9 }}
+                      onClick={() => setShowParticipants(false)}
+                      className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+                      title="Close participants panel"
+                    >
+                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </motion.button>
+                  </div>
+                  <motion.div
+                    variants={staggerContainer}
+                    initial="hidden"
+                    animate="visible"
+                    className="mt-4 space-y-2"
                   >
-                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                  </button>
-                </div>
-                <div className="mt-4 space-y-2">
-                  {allParticipantsForPanel.map((participant) => {
-                    const isSpeaking = activeSpeakerIdentities.has(participant.identity);
-                    return (
-                      <div
-                        key={participant.identity}
-                        className={`flex items-center justify-between rounded-2xl border px-4 py-3 transition-colors ${
-                          isSpeaking
-                            ? "border-green-200 bg-green-50"
-                            : "border-slate-100 bg-slate-50"
-                        }`}
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <span
-                            className={`h-2 w-2 rounded-full transition-colors ${
-                              isSpeaking ? "animate-pulse bg-green-500" : "bg-slate-300"
-                            }`}
-                          />
-                          <div>
-                            <p className="text-sm font-medium text-slate-800">
-                              {participant.name}
-                              {participant.isLocal ? (
-                                <span className="ml-1.5 text-xs font-normal text-slate-400">(You)</span>
-                              ) : null}
-                            </p>
-                            {isSpeaking ? (
-                              <p className="text-xs text-green-600">Speaking...</p>
-                            ) : (
-                              <p className="text-xs text-slate-400">
-                                {participant.isTeacher ? "Teacher" : "Student"}
+                    {allParticipantsForPanel.map((participant) => {
+                      const isSpeaking = activeSpeakerIdentities.has(participant.identity);
+                      return (
+                        <motion.div
+                          key={participant.identity}
+                          variants={fadeUp}
+                          className={`flex items-center justify-between rounded-2xl border px-4 py-3 transition-colors ${
+                            isSpeaking
+                              ? "border-green-200 bg-green-50"
+                              : "border-slate-100 bg-slate-50"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <span
+                              className={`h-2 w-2 rounded-full transition-colors ${
+                                isSpeaking ? "animate-pulse bg-green-500" : "bg-slate-300"
+                              }`}
+                            />
+                            <div>
+                              <p className="text-sm font-medium text-slate-800">
+                                {participant.name}
+                                {participant.isLocal ? (
+                                  <span className="ml-1.5 text-xs font-normal text-slate-400">(You)</span>
+                                ) : null}
                               </p>
+                              {isSpeaking ? (
+                                <p className="text-xs text-green-600">Speaking...</p>
+                              ) : (
+                                <p className="text-xs text-slate-400">
+                                  {participant.isTeacher ? "Teacher" : "Student"}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {participant.isLocal ? (
+                              <>
+                                {micEnabled
+                                  ? <MicIcon className="h-4 w-4 text-emerald-500" />
+                                  : <MicOffIcon className="h-4 w-4 text-red-400" />}
+                                {cameraEnabled
+                                  ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
+                                  : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
+                              </>
+                            ) : (
+                              <>
+                                {participant.micEnabled
+                                  ? <MicIcon className="h-4 w-4 text-emerald-500" />
+                                  : <MicOffIcon className="h-4 w-4 text-red-400" />}
+                                {participant.cameraEnabled
+                                  ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
+                                  : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
+                              </>
                             )}
                           </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {participant.isLocal ? (
-                            <>
-                              {micEnabled
-                                ? <MicIcon className="h-4 w-4 text-emerald-500" />
-                                : <MicOffIcon className="h-4 w-4 text-red-400" />}
-                              {cameraEnabled
-                                ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
-                                : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
-                            </>
-                          ) : (
-                            <>
-                              {participant.micEnabled
-                                ? <MicIcon className="h-4 w-4 text-emerald-500" />
-                                : <MicOffIcon className="h-4 w-4 text-red-400" />}
-                              {participant.cameraEnabled
-                                ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
-                                : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            ) : (
-              <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
-                <p className="text-sm font-semibold uppercase tracking-[0.24em] text-red-500">
-                  Classroom Notes
-                </p>
-                <div className="mt-5 space-y-3">
-                  <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
-                    LiveKit is handling the room connection for a more stable classroom session.
+                        </motion.div>
+                      );
+                    })}
+                  </motion.div>
+                </motion.section>
+              ) : (
+                <motion.section
+                  key="classroom-notes"
+                  variants={notesVariants}
+                  initial="hidden"
+                  animate="visible"
+                  exit="exit"
+                  className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft"
+                >
+                  <p className="text-sm font-semibold uppercase tracking-[0.24em] text-red-500">
+                    Classroom Notes
+                  </p>
+                  <div className="mt-5 space-y-3">
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
+                      LiveKit is handling the room connection for a more stable classroom session.
+                    </div>
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
+                      Recordings still save through the existing LMS upload workflow.
+                    </div>
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
+                      Room name: {classId}
+                    </div>
                   </div>
-                  <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
-                    Recordings still save through the existing LMS upload workflow.
-                  </div>
-                  <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
-                    Room name: {classId}
-                  </div>
-                </div>
-              </section>
-            )}
+                </motion.section>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </div>
-    </main>
+    </motion.main>
   );
 }

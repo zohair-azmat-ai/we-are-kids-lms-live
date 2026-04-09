@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { motion } from "framer-motion";
 
 import { useAuth } from "@/components/auth-provider";
 import { AIInsightsPanel } from "@/components/ai-insights-panel";
@@ -175,16 +176,20 @@ export default function TeacherDashboardPage() {
               { label: "Recordings", value: analytics.recordings_created, accent: "text-amber-600" },
               { label: "Enrolled Students", value: analytics.enrolled_students, accent: "text-emerald-600" },
               { label: "Avg Class Size", value: analytics.average_class_size, accent: "text-violet-600" },
-            ].map((item) => (
-              <article
+            ].map((item, i) => (
+              <motion.article
                 key={item.label}
-                className="rounded-[1.75rem] border border-slate-100 bg-slate-50 p-4"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.35, delay: i * 0.07, ease: "easeOut" }}
+                whileHover={{ scale: 1.03, y: -2, boxShadow: "0 8px 24px rgba(0,0,0,0.08)" }}
+                className="rounded-[1.75rem] border border-slate-100 bg-slate-50 p-4 cursor-default"
               >
                 <p className={`text-xs font-semibold uppercase tracking-[0.22em] ${item.accent}`}>
                   {item.label}
                 </p>
                 <p className="mt-3 text-3xl font-semibold text-slate-800">{item.value}</p>
-              </article>
+              </motion.article>
             ))}
           </div>
 
@@ -239,8 +244,12 @@ export default function TeacherDashboardPage() {
               const status = getRecordingStatus(recording);
 
               return (
-                <div
+                <motion.div
                   key={recording.recording_id}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  whileHover={{ scale: 1.01, boxShadow: "0 4px 16px rgba(0,0,0,0.06)" }}
+                  transition={{ duration: 0.25, ease: "easeOut" }}
                   className="flex flex-col gap-4 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-slate-700 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div>
@@ -254,7 +263,7 @@ export default function TeacherDashboardPage() {
                   >
                     {status.label}
                   </div>
-                </div>
+                </motion.div>
               );
             })}
           </div>

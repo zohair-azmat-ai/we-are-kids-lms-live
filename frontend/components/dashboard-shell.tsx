@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
 
 import { useAuth } from "@/components/auth-provider";
 import { type UserRole } from "@/lib/demo-auth";
@@ -203,7 +204,12 @@ export function DashboardShell({
           ) : null}
         </header>
 
-        <section className="glass-card mt-8 rounded-2xl px-5 py-8 sm:px-8 sm:py-10">
+        <motion.section
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: "easeOut" }}
+          className="glass-card mt-8 rounded-2xl px-5 py-8 sm:px-8 sm:py-10"
+        >
           <p className="text-sm font-semibold uppercase tracking-[0.28em] text-blue-600">
             Welcome Back
           </p>
@@ -216,9 +222,16 @@ export function DashboardShell({
           <div className="mt-6 inline-flex max-w-full rounded-xl bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700">
             Signed in as {user.email}
           </div>
-        </section>
+        </motion.section>
 
-        <div className="mt-8">{children}</div>
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.12, ease: "easeOut" }}
+          className="mt-8"
+        >
+          {children}
+        </motion.div>
       </div>
       {allowedRole !== "student" ? <AIAssistantChat /> : null}
     </main>
