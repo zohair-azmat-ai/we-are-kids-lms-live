@@ -10,6 +10,7 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
+    "framer-motion": "^12.38.0",
     "livekit-client": "2.15.6",
     "next": "14.2.24",
     "react": "18.3.1",

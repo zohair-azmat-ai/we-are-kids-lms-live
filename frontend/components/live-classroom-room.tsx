@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ConnectionState, Participant, Room, RoomEvent, Track } from "livekit-client";
+import { ConnectionState, Participant, RemoteTrack, Room, RoomEvent, Track } from "livekit-client";
+import { AnimatePresence, motion } from "framer-motion";
 
 import { useAuth } from "@/components/auth-provider";
 import { LoadingPanel, Spinner } from "@/components/ui-state";
@@ -22,6 +23,72 @@ import {
   type LiveClassSession,
 } from "@/lib/api";
 
+// ─── Inline SVG icons ───────────────────────────────────────────────────────
+
+function MicIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+      <line x1="12" y1="19" x2="12" y2="23" />
+      <line x1="8" y1="23" x2="16" y2="23" />
+    </svg>
+  );
+}
+
+function MicOffIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <line x1="1" y1="1" x2="23" y2="23" />
+      <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V5a3 3 0 0 0-5.94-.6" />
+      <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23" />
+      <line x1="12" y1="19" x2="12" y2="23" />
+      <line x1="8" y1="23" x2="16" y2="23" />
+    </svg>
+  );
+}
+
+function VideoOnIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="23 7 16 12 23 17 23 7" />
+      <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+    </svg>
+  );
+}
+
+function VideoOffIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10" />
+      <line x1="1" y1="1" x2="23" y2="23" />
+    </svg>
+  );
+}
+
+function UsersIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  );
+}
+
+function PhoneOffIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07C9.44 17.29 7.76 15.6 6.07 13" />
+      <path d="M6.09 3.91A19.79 19.79 0 0 1 14.72 7" />
+      <line x1="1" y1="1" x2="23" y2="23" />
+    </svg>
+  );
+}
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+
 type ClassroomRole = Extract<UserRole, "teacher" | "student">;
 
 type LiveClassroomRoomProps = {
@@ -35,7 +102,35 @@ type ParticipantCard = {
   stream: MediaStream | null;
   isLocal: boolean;
   isTeacher: boolean;
+  micEnabled: boolean;
+  cameraEnabled: boolean;
 };
+
+// ─── Animation variants ─────────────────────────────────────────────────────
+
+const fadeUp = {
+  hidden: { opacity: 0, y: 16 },
+  visible: { opacity: 1, y: 0 },
+};
+
+const staggerContainer = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.07 } },
+};
+
+const panelVariants = {
+  hidden: { opacity: 0, x: 32 },
+  visible: { opacity: 1, x: 0, transition: { type: "spring" as const, stiffness: 320, damping: 28 } },
+  exit: { opacity: 0, x: 32 },
+};
+
+const notesVariants = {
+  hidden: { opacity: 0 },
+  visible: { opacity: 1 },
+  exit: { opacity: 0 },
+};
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
 function createStreamFromParticipant(participant: Participant): MediaStream | null {
   const stream = new MediaStream();
@@ -61,6 +156,8 @@ function hasPublishedTrack(participant: Participant, kind: Track.Kind): boolean 
   return false;
 }
 
+// ─── Component ──────────────────────────────────────────────────────────────
+
 export function LiveClassroomRoom({
   classId,
   role,
@@ -82,6 +179,9 @@ export function LiveClassroomRoom({
   const [isUploadingRecording, setIsUploadingRecording] = useState(false);
   const [recordingError, setRecordingError] = useState("");
   const [recordingSuccess, setRecordingSuccess] = useState("");
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [activeSpeakerIdentities, setActiveSpeakerIdentities] = useState<Set<string>>(new Set());
+  const [showParticipants, setShowParticipants] = useState(false);
 
   const roomRef = useRef<Room | null>(null);
   const classroomRef = useRef<LiveClassSession | null>(null);
@@ -94,6 +194,7 @@ export function LiveClassroomRoom({
   const recordingChunksRef = useRef<Blob[]>([]);
   const pendingStopResolveRef = useRef<(() => void) | null>(null);
   const recordingSessionIdRef = useRef<string | null>(null);
+  const audioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
 
   const dashboardPath =
     role === "teacher" ? "/teacher/dashboard" : "/student/dashboard";
@@ -114,8 +215,10 @@ export function LiveClassroomRoom({
       stream: localStream,
       isLocal: true,
       isTeacher: role === "teacher",
+      micEnabled,
+      cameraEnabled,
     };
-  }, [localStream, role, session]);
+  }, [localStream, role, session, micEnabled, cameraEnabled]);
 
   const remoteParticipants = useMemo(() => {
     return participants.filter((participant) => !participant.isLocal);
@@ -138,6 +241,12 @@ export function LiveClassroomRoom({
     );
   }, [classroom?.teacher_email, remoteParticipants]);
 
+  const allParticipantsForPanel = useMemo(() => {
+    return localParticipantCard
+      ? [localParticipantCard, ...remoteParticipants]
+      : remoteParticipants;
+  }, [localParticipantCard, remoteParticipants]);
+
   function syncRoomState(room: Room, currentClassroom: LiveClassSession | null) {
     const nextLocalStream = createStreamFromParticipant(room.localParticipant);
     localStreamRef.current = nextLocalStream;
@@ -152,6 +261,8 @@ export function LiveClassroomRoom({
         stream: createStreamFromParticipant(participant),
         isLocal: false,
         isTeacher: participant.identity === currentClassroom?.teacher_email,
+        micEnabled: hasPublishedTrack(participant, Track.Kind.Audio),
+        cameraEnabled: hasPublishedTrack(participant, Track.Kind.Video),
       }),
     );
 
@@ -202,17 +313,14 @@ export function LiveClassroomRoom({
     const sessionId = recordingSessionIdRef.current;
 
     try {
-      // If we pre-created a DB entry via /recordings/start, mark it available immediately.
-      // This guarantees the recording appears in the panel even if file upload fails.
       if (sessionId) {
         try {
           await stopRecordingSession({ recordingId: sessionId });
         } catch {
-          // stopRecordingSession failing is non-fatal — the entry already exists in DB.
+          // stopRecordingSession failing is non-fatal.
         }
       }
 
-      // Best-effort: try to upload the actual video blob so it can be played back.
       if (blob.size > 0) {
         const fileExtension = blob.type.includes("webm") ? "webm" : "bin";
         const recordingFile = new File(
@@ -230,8 +338,7 @@ export function LiveClassroomRoom({
             recordingId: sessionId ?? undefined,
           });
         } catch {
-          // File upload failed (e.g. ephemeral storage) but the metadata entry
-          // was already saved by stopRecordingSession above.
+          // File upload failed but metadata entry already saved.
         }
       }
 
@@ -294,7 +401,6 @@ export function LiveClassroomRoom({
         if (recordedBlob.size > 0) {
           await uploadRecordedBlob(recordedBlob);
         } else {
-          // Even with no blob data, try to mark the session as available if it was pre-created.
           if (recordingSessionIdRef.current) {
             try {
               await stopRecordingSession({ recordingId: recordingSessionIdRef.current });
@@ -315,8 +421,6 @@ export function LiveClassroomRoom({
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
 
-      // Pre-create a DB entry immediately so it appears in the Recordings panel
-      // even if the final file upload fails or is slow.
       if (classroom) {
         try {
           const sessionResponse = await startRecordingSession({
@@ -325,7 +429,6 @@ export function LiveClassroomRoom({
           });
           recordingSessionIdRef.current = sessionResponse.recording_id;
         } catch {
-          // Non-fatal: we'll fall back to creating the entry via uploadRecording on stop.
           recordingSessionIdRef.current = null;
         }
       }
@@ -479,6 +582,11 @@ export function LiveClassroomRoom({
         const room = new Room({
           adaptiveStream: true,
           dynacast: true,
+          audioCaptureDefaults: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
         });
         roomRef.current = room;
 
@@ -508,10 +616,31 @@ export function LiveClassroomRoom({
           .on(RoomEvent.ParticipantDisconnected, () => {
             syncRoomState(room, classroomRef.current);
           })
-          .on(RoomEvent.TrackSubscribed, () => {
+          .on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
+            setActiveSpeakerIdentities(new Set(speakers.map((s) => s.identity)));
+          })
+          .on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
+            if (track.kind === Track.Kind.Audio && track.mediaStreamTrack && track.sid) {
+              const audioEl = document.createElement("audio");
+              audioEl.srcObject = new MediaStream([track.mediaStreamTrack]);
+              audioEl.autoplay = true;
+              void audioEl.play().catch(() => {
+                // Autoplay blocked — user must tap "Enable Audio"
+              });
+              document.body.appendChild(audioEl);
+              audioElementsRef.current.set(track.sid, audioEl);
+            }
             syncRoomState(room, classroomRef.current);
           })
-          .on(RoomEvent.TrackUnsubscribed, () => {
+          .on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
+            if (track.kind === Track.Kind.Audio && track.sid) {
+              const audioEl = audioElementsRef.current.get(track.sid);
+              if (audioEl) {
+                audioEl.srcObject = null;
+                audioEl.remove();
+                audioElementsRef.current.delete(track.sid);
+              }
+            }
             syncRoomState(room, classroomRef.current);
           })
           .on(RoomEvent.LocalTrackPublished, () => {
@@ -552,7 +681,16 @@ export function LiveClassroomRoom({
 
         try {
           await room.localParticipant.setCameraEnabled(true);
-          await room.localParticipant.setMicrophoneEnabled(true);
+          await room.localParticipant.setMicrophoneEnabled(true, {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          });
+          room.localParticipant.audioTrackPublications.forEach((pub) => {
+            if (pub.track?.isMuted) {
+              void pub.track.unmute();
+            }
+          });
         } catch (deviceError) {
           if (
             deviceError instanceof DOMException &&
@@ -611,6 +749,12 @@ export function LiveClassroomRoom({
 
         await unregisterPresence();
       })();
+
+      audioElementsRef.current.forEach((audioEl) => {
+        audioEl.srcObject = null;
+        audioEl.remove();
+      });
+      audioElementsRef.current.clear();
 
       if (roomRef.current) {
         roomRef.current.disconnect();
@@ -716,10 +860,27 @@ export function LiveClassroomRoom({
     );
   }
 
+  const mainTileIdentity =
+    role === "teacher"
+      ? studentTiles[0]?.identity
+      : teacherStreamCard?.identity;
+
   return (
-    <main className="min-h-screen">
+    <motion.main
+      className="min-h-screen"
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, ease: "easeOut" }}
+    >
       <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 sm:py-6 lg:px-10">
-        <header className="rounded-[2rem] border border-slate-100 bg-white px-5 py-5 shadow-soft sm:px-6">
+
+        {/* ── Header ─────────────────────────────────────────────────────── */}
+        <motion.header
+          variants={fadeUp}
+          initial="hidden"
+          animate="visible"
+          className="rounded-[2rem] border border-slate-100 bg-white px-5 py-5 shadow-soft sm:px-6"
+        >
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <p className="text-sm font-semibold uppercase tracking-[0.28em] text-blue-600">
@@ -737,11 +898,20 @@ export function LiveClassroomRoom({
               <div className="inline-flex rounded-full bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700">
                 {connectionState}
               </div>
-              {role === "teacher" && isRecording ? (
-                <div className="inline-flex rounded-full bg-amber-100 px-4 py-2 text-sm font-semibold text-amber-800">
-                  Recording Active
-                </div>
-              ) : null}
+              <AnimatePresence>
+                {role === "teacher" && isRecording ? (
+                  <motion.div
+                    key="rec-badge"
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-4 py-2 text-sm font-semibold text-amber-800"
+                  >
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                    Recording
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
               {role === "teacher" && isUploadingRecording ? (
                 <div className="inline-flex rounded-full bg-blue-100 px-4 py-2 text-sm font-semibold text-blue-700">
                   Uploading Recording
@@ -752,22 +922,78 @@ export function LiveClassroomRoom({
               </div>
             </div>
           </div>
-        </header>
+        </motion.header>
 
-        {statusMessage ? (
-          <div className="mt-6 rounded-[1.5rem] border border-amber-100 bg-amber-50 px-5 py-4 text-sm text-amber-700">
-            {statusMessage}
-          </div>
-        ) : null}
+        {/* ── Banners ─────────────────────────────────────────────────────── */}
+        <AnimatePresence>
+          {statusMessage ? (
+            <motion.div
+              key="status-banner"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="mt-4 rounded-[1.5rem] border border-amber-100 bg-amber-50 px-5 py-4 text-sm text-amber-700"
+            >
+              {statusMessage}
+            </motion.div>
+          ) : null}
 
-        {deviceMessage ? (
-          <div className="mt-6 rounded-[1.5rem] border border-red-100 bg-red-50 px-5 py-4 text-sm text-red-600">
-            {deviceMessage}
-          </div>
-        ) : null}
+          {deviceMessage ? (
+            <motion.div
+              key="device-banner"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="mt-4 rounded-[1.5rem] border border-red-100 bg-red-50 px-5 py-4 text-sm text-red-600"
+            >
+              {deviceMessage}
+            </motion.div>
+          ) : null}
 
-        <div className="mt-8 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-          <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+          {!audioUnlocked && connectionState === "connected" ? (
+            <motion.div
+              key="audio-banner"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="mt-4 rounded-[1.5rem] border border-blue-100 bg-blue-50 px-5 py-4"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-blue-700">
+                  Tap "Enable Audio" to hear participants (required on mobile).
+                </p>
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => {
+                    audioElementsRef.current.forEach((audioEl) => {
+                      void audioEl.play().catch(() => {});
+                    });
+                    setAudioUnlocked(true);
+                  }}
+                  className="shrink-0 rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white"
+                >
+                  Enable Audio
+                </motion.button>
+              </div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+
+        {/* ── Main grid ───────────────────────────────────────────────────── */}
+        <div className="mt-6 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+
+          {/* ── Left: main video + control bar ─────────────────────────── */}
+          <motion.section
+            variants={fadeUp}
+            initial="hidden"
+            animate="visible"
+            transition={{ delay: 0.05 } as never}
+            className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft"
+          >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm text-slate-500">
@@ -784,6 +1010,7 @@ export function LiveClassroomRoom({
               </div>
             </div>
 
+            {/* Main video tile */}
             <div className="mt-6">
               <VideoTile
                 stream={
@@ -800,68 +1027,157 @@ export function LiveClassroomRoom({
                   role === "teacher" ? "Student video" : "Teacher live stream"
                 }
                 priority
+                isSpeaking={
+                  mainTileIdentity
+                    ? activeSpeakerIdentities.has(mainTileIdentity)
+                    : false
+                }
                 className="min-h-[280px] sm:min-h-[360px] lg:min-h-[420px]"
               />
             </div>
 
-            <div className="mt-6 grid gap-3 sm:flex sm:flex-wrap">
-              <button
+            {/* ── Zoom-style control bar ────────────────────────────────── */}
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-1 rounded-2xl border border-slate-100 bg-white/80 px-3 py-3 shadow-soft backdrop-blur-sm sm:gap-2">
+
+              {/* Mic */}
+              <motion.button
                 type="button"
+                whileTap={{ scale: 0.88 }}
+                whileHover={{ scale: 1.05 }}
+                transition={{ type: "spring", stiffness: 400, damping: 20 }}
                 onClick={() => void toggleMic()}
-                className={`inline-flex w-full items-center justify-center rounded-full px-4 py-3 text-sm font-semibold sm:w-auto ${
+                title={micEnabled ? "Mute microphone" : "Unmute microphone"}
+                className={`flex flex-col items-center gap-1 rounded-xl px-3 py-2 transition-colors ${
                   micEnabled
-                    ? "border border-slate-200 bg-white text-slate-700"
-                    : "bg-amber-100 text-amber-800"
+                    ? "text-slate-700 hover:bg-slate-50"
+                    : "bg-red-100 text-red-600"
                 }`}
               >
-                {micEnabled ? "Mic On" : "Mic Off"}
-              </button>
-              <button
+                {micEnabled
+                  ? <MicIcon className="h-5 w-5" />
+                  : <MicOffIcon className="h-5 w-5" />}
+                <span className="text-[10px] font-medium leading-none">
+                  {micEnabled ? "Mute" : "Unmute"}
+                </span>
+              </motion.button>
+
+              {/* Camera */}
+              <motion.button
                 type="button"
+                whileTap={{ scale: 0.88 }}
+                whileHover={{ scale: 1.05 }}
+                transition={{ type: "spring", stiffness: 400, damping: 20 }}
                 onClick={() => void toggleCamera()}
-                className={`inline-flex w-full items-center justify-center rounded-full px-4 py-3 text-sm font-semibold sm:w-auto ${
+                title={cameraEnabled ? "Stop video" : "Start video"}
+                className={`flex flex-col items-center gap-1 rounded-xl px-3 py-2 transition-colors ${
                   cameraEnabled
-                    ? "border border-slate-200 bg-white text-slate-700"
-                    : "bg-amber-100 text-amber-800"
+                    ? "text-slate-700 hover:bg-slate-50"
+                    : "bg-red-100 text-red-600"
                 }`}
               >
-                {cameraEnabled ? "Camera On" : "Camera Off"}
-              </button>
+                {cameraEnabled
+                  ? <VideoOnIcon className="h-5 w-5" />
+                  : <VideoOffIcon className="h-5 w-5" />}
+                <span className="text-[10px] font-medium leading-none">
+                  {cameraEnabled ? "Stop Video" : "Start Video"}
+                </span>
+              </motion.button>
+
+              {/* Participants toggle */}
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.88 }}
+                whileHover={{ scale: 1.05 }}
+                transition={{ type: "spring", stiffness: 400, damping: 20 }}
+                onClick={() => setShowParticipants((prev) => !prev)}
+                title="Show participants"
+                className={`flex flex-col items-center gap-1 rounded-xl px-3 py-2 transition-colors ${
+                  showParticipants
+                    ? "bg-blue-100 text-blue-600"
+                    : "text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                <UsersIcon className="h-5 w-5" />
+                <span className="text-[10px] font-medium leading-none">Participants</span>
+              </motion.button>
+
+              {/* Record (teacher only) */}
               {role === "teacher" ? (
-                <button
+                <motion.button
                   type="button"
+                  whileTap={{ scale: 0.88 }}
+                  whileHover={{ scale: 1.05 }}
+                  transition={{ type: "spring", stiffness: 400, damping: 20 }}
                   onClick={isRecording ? () => void stopRecording() : () => void startRecording()}
                   disabled={isUploadingRecording}
-                  className={`inline-flex w-full items-center justify-center gap-2 rounded-full px-4 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto ${
+                  title={isRecording ? "Stop recording" : "Start recording"}
+                  className={`flex flex-col items-center gap-1 rounded-xl px-3 py-2 transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                     isRecording
-                      ? "bg-amber-100 text-amber-800"
-                      : "border border-slate-200 bg-white text-slate-700"
+                      ? "bg-amber-100 text-amber-700"
+                      : "text-slate-700 hover:bg-slate-50"
                   }`}
                 >
-                  {isUploadingRecording ? <Spinner className="h-4 w-4" /> : null}
-                  {isRecording ? "Stop Recording" : "Record"}
-                </button>
+                  <span className="flex h-5 w-5 items-center justify-center">
+                    {isUploadingRecording ? (
+                      <Spinner className="h-4 w-4" />
+                    ) : (
+                      <span
+                        className={`h-3.5 w-3.5 rounded-full ${
+                          isRecording ? "bg-amber-600" : "bg-red-500"
+                        }`}
+                      />
+                    )}
+                  </span>
+                  <span className="text-[10px] font-medium leading-none">
+                    {isRecording ? "Stop Rec" : "Record"}
+                  </span>
+                </motion.button>
               ) : null}
-              <button
+
+              <div className="mx-1 h-8 w-px bg-slate-200" />
+
+              {/* End / Leave */}
+              <motion.button
                 type="button"
+                whileTap={{ scale: 0.88 }}
+                whileHover={{ scale: 1.05, boxShadow: "0 4px 16px rgba(239,68,68,0.35)" }}
+                transition={{ type: "spring", stiffness: 400, damping: 20 }}
                 onClick={handleLeaveOrEndClass}
-                className="inline-flex w-full items-center justify-center rounded-full bg-red-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-red-100 sm:w-auto"
+                title={role === "teacher" ? "End class for everyone" : "Leave class"}
+                className="flex flex-col items-center gap-1 rounded-xl bg-red-500 px-3 py-2 text-white shadow-sm transition-colors"
               >
-                {role === "teacher" ? "End Class" : "Leave Class"}
-              </button>
+                <PhoneOffIcon className="h-5 w-5" />
+                <span className="text-[10px] font-medium leading-none">
+                  {role === "teacher" ? "End Class" : "Leave"}
+                </span>
+              </motion.button>
             </div>
 
-            {role === "teacher" && recordingError ? (
-              <div className="mt-4 rounded-[1.25rem] border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
-                {recordingError}
-              </div>
-            ) : null}
-
-            {role === "teacher" && recordingSuccess ? (
-              <div className="mt-4 rounded-[1.25rem] border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-                {recordingSuccess}
-              </div>
-            ) : null}
+            {/* Recording status */}
+            <AnimatePresence>
+              {role === "teacher" && recordingError ? (
+                <motion.div
+                  key="rec-error"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 6 }}
+                  className="mt-4 rounded-[1.25rem] border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600"
+                >
+                  {recordingError}
+                </motion.div>
+              ) : null}
+              {role === "teacher" && recordingSuccess ? (
+                <motion.div
+                  key="rec-success"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 6 }}
+                  className="mt-4 rounded-[1.25rem] border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+                >
+                  {recordingSuccess}
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
 
             {remoteParticipants.length === 0 ? (
               <div className="mt-4 rounded-[1.25rem] border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-600">
@@ -870,36 +1186,84 @@ export function LiveClassroomRoom({
                   : "Waiting for the teacher or classmates to appear in the room."}
               </div>
             ) : null}
-          </section>
+          </motion.section>
 
+          {/* ── Right sidebar ───────────────────────────────────────────── */}
           <div className="grid gap-6">
-            <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+
+            {/* Self view / teacher participant list */}
+            <motion.section
+              variants={fadeUp}
+              initial="hidden"
+              animate="visible"
+              transition={{ delay: 0.1 } as never}
+              className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft"
+            >
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">
                 {role === "teacher" ? "Participants" : "Self View"}
               </p>
 
               {role === "teacher" ? (
-                <div className="mt-5 space-y-3">
+                <motion.div
+                  variants={staggerContainer}
+                  initial="hidden"
+                  animate="visible"
+                  className="mt-5 space-y-3"
+                >
                   {localParticipantCard ? (
-                    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-slate-700">
-                      {localParticipantCard.name} (You)
-                    </div>
+                    <motion.div
+                      variants={fadeUp}
+                      className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3"
+                    >
+                      <div className="flex items-center gap-2">
+                        {activeSpeakerIdentities.has(localParticipantCard.identity) ? (
+                          <span className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
+                        ) : (
+                          <span className="h-2 w-2 rounded-full bg-slate-300" />
+                        )}
+                        <span className="text-sm text-slate-700">{localParticipantCard.name} (You)</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {micEnabled
+                          ? <MicIcon className="h-4 w-4 text-emerald-500" />
+                          : <MicOffIcon className="h-4 w-4 text-red-400" />}
+                        {cameraEnabled
+                          ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
+                          : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
+                      </div>
+                    </motion.div>
                   ) : null}
                   {studentTiles.length ? (
                     studentTiles.map((participant) => (
-                      <div
+                      <motion.div
                         key={participant.identity}
-                        className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-slate-700"
+                        variants={fadeUp}
+                        className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3"
                       >
-                        {participant.name}
-                      </div>
+                        <div className="flex items-center gap-2">
+                          {activeSpeakerIdentities.has(participant.identity) ? (
+                            <span className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
+                          ) : (
+                            <span className="h-2 w-2 rounded-full bg-slate-300" />
+                          )}
+                          <span className="text-sm text-slate-700">{participant.name}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {participant.micEnabled
+                            ? <MicIcon className="h-4 w-4 text-emerald-500" />
+                            : <MicOffIcon className="h-4 w-4 text-red-400" />}
+                          {participant.cameraEnabled
+                            ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
+                            : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
+                        </div>
+                      </motion.div>
                     ))
                   ) : (
-                    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-slate-700">
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
                       Students will appear here after they join the room.
                     </div>
                   )}
-                </div>
+                </motion.div>
               ) : (
                 <div className="mt-5">
                   <VideoTile
@@ -907,13 +1271,21 @@ export function LiveClassroomRoom({
                     title={session.name}
                     subtitle="Your camera"
                     muted
+                    isSpeaking={activeSpeakerIdentities.has(session.email)}
                     className="min-h-[180px] sm:min-h-[220px]"
                   />
                 </div>
               )}
-            </section>
+            </motion.section>
 
-            <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+            {/* Video tiles */}
+            <motion.section
+              variants={fadeUp}
+              initial="hidden"
+              animate="visible"
+              transition={{ delay: 0.15 } as never}
+              className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft"
+            >
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-sky-600">
                 {role === "teacher" ? "Student Tiles" : "Classroom Tiles"}
               </p>
@@ -924,6 +1296,7 @@ export function LiveClassroomRoom({
                     title={localParticipantCard.name}
                     subtitle="Your camera"
                     muted
+                    isSpeaking={activeSpeakerIdentities.has(localParticipantCard.identity)}
                     className="min-h-[160px] sm:min-h-[180px]"
                   />
                 ) : null}
@@ -933,36 +1306,146 @@ export function LiveClassroomRoom({
                     stream={participant.stream}
                     title={participant.name}
                     subtitle={participant.isTeacher ? "Teacher" : "Student"}
+                    isSpeaking={activeSpeakerIdentities.has(participant.identity)}
                     className="min-h-[160px] sm:min-h-[180px]"
                   />
                 ))}
                 {!remoteParticipants.length ? (
-                  <div className="rounded-[1.5rem] border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.3 }}
+                    className="rounded-[1.5rem] border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600"
+                  >
                     Participant video tiles will appear here when others join the room.
-                  </div>
+                  </motion.div>
                 ) : null}
               </div>
-            </section>
+            </motion.section>
 
-            <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
-              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-red-500">
-                Classroom Notes
-              </p>
-              <div className="mt-5 space-y-3">
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
-                  LiveKit is handling the room connection for a more stable classroom session.
-                </div>
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
-                  Recordings still save through the existing LMS upload workflow.
-                </div>
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
-                  Room name: {classId}
-                </div>
-              </div>
-            </section>
+            {/* Participants panel / Classroom Notes — animated swap */}
+            <AnimatePresence mode="wait">
+              {showParticipants ? (
+                <motion.section
+                  key="participants-panel"
+                  variants={panelVariants}
+                  initial="hidden"
+                  animate="visible"
+                  exit="exit"
+                  className="rounded-[2rem] border border-blue-100 bg-white p-6 shadow-soft"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">
+                      All Participants ({allParticipantsForPanel.length})
+                    </p>
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.9 }}
+                      onClick={() => setShowParticipants(false)}
+                      className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+                      title="Close participants panel"
+                    >
+                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </motion.button>
+                  </div>
+                  <motion.div
+                    variants={staggerContainer}
+                    initial="hidden"
+                    animate="visible"
+                    className="mt-4 space-y-2"
+                  >
+                    {allParticipantsForPanel.map((participant) => {
+                      const isSpeaking = activeSpeakerIdentities.has(participant.identity);
+                      return (
+                        <motion.div
+                          key={participant.identity}
+                          variants={fadeUp}
+                          className={`flex items-center justify-between rounded-2xl border px-4 py-3 transition-colors ${
+                            isSpeaking
+                              ? "border-green-200 bg-green-50"
+                              : "border-slate-100 bg-slate-50"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <span
+                              className={`h-2 w-2 rounded-full transition-colors ${
+                                isSpeaking ? "animate-pulse bg-green-500" : "bg-slate-300"
+                              }`}
+                            />
+                            <div>
+                              <p className="text-sm font-medium text-slate-800">
+                                {participant.name}
+                                {participant.isLocal ? (
+                                  <span className="ml-1.5 text-xs font-normal text-slate-400">(You)</span>
+                                ) : null}
+                              </p>
+                              {isSpeaking ? (
+                                <p className="text-xs text-green-600">Speaking...</p>
+                              ) : (
+                                <p className="text-xs text-slate-400">
+                                  {participant.isTeacher ? "Teacher" : "Student"}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {participant.isLocal ? (
+                              <>
+                                {micEnabled
+                                  ? <MicIcon className="h-4 w-4 text-emerald-500" />
+                                  : <MicOffIcon className="h-4 w-4 text-red-400" />}
+                                {cameraEnabled
+                                  ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
+                                  : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
+                              </>
+                            ) : (
+                              <>
+                                {participant.micEnabled
+                                  ? <MicIcon className="h-4 w-4 text-emerald-500" />
+                                  : <MicOffIcon className="h-4 w-4 text-red-400" />}
+                                {participant.cameraEnabled
+                                  ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
+                                  : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
+                              </>
+                            )}
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </motion.div>
+                </motion.section>
+              ) : (
+                <motion.section
+                  key="classroom-notes"
+                  variants={notesVariants}
+                  initial="hidden"
+                  animate="visible"
+                  exit="exit"
+                  className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft"
+                >
+                  <p className="text-sm font-semibold uppercase tracking-[0.24em] text-red-500">
+                    Classroom Notes
+                  </p>
+                  <div className="mt-5 space-y-3">
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
+                      LiveKit is handling the room connection for a more stable classroom session.
+                    </div>
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
+                      Recordings still save through the existing LMS upload workflow.
+                    </div>
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-700">
+                      Room name: {classId}
+                    </div>
+                  </div>
+                </motion.section>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </div>
-    </main>
+    </motion.main>
   );
 }
