@@ -1,13 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 
 import { DashboardShell } from "@/components/dashboard-shell";
 import { useAuth } from "@/components/auth-provider";
 import { LoadingPanel } from "@/components/ui-state";
 import { usePageTitle } from "@/hooks/use-page-title";
-import { fetchRecording, getAssetUrl, type RecordingItem } from "@/lib/api";
+import {
+  fetchRecording,
+  fetchRecordingIntelligence,
+  regenerateRecordingIntelligence,
+  getAssetUrl,
+  type RecordingIntelligence,
+  type RecordingItem,
+} from "@/lib/api";
 
 type RecordingPlaybackProps = {
   allowedRole: "teacher" | "admin" | "student";
@@ -38,6 +45,10 @@ export function RecordingPlayback({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [intelligence, setIntelligence] = useState<RecordingIntelligence | null>(null);
+  const [isLoadingIntelligence, setIsLoadingIntelligence] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const intelligencePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   usePageTitle(recording ? recording.title : title);
 
@@ -75,6 +86,81 @@ export function RecordingPlayback({
 
     void loadRecording();
   }, [params.recordingId, allowedRole, user]);
+
+  // Load and poll intelligence until completed/failed
+  const loadIntelligence = useCallback(async (recordingId: string) => {
+    try {
+      setIsLoadingIntelligence(true);
+      const data = await fetchRecordingIntelligence(recordingId);
+      setIntelligence(data);
+
+      // Poll while still processing
+      if (data.processing_status === "pending" || data.processing_status === "processing") {
+        if (!intelligencePollRef.current) {
+          intelligencePollRef.current = setInterval(async () => {
+            try {
+              const updated = await fetchRecordingIntelligence(recordingId);
+              setIntelligence(updated);
+              if (updated.processing_status === "completed" || updated.processing_status === "failed") {
+                if (intelligencePollRef.current) {
+                  clearInterval(intelligencePollRef.current);
+                  intelligencePollRef.current = null;
+                }
+              }
+            } catch {
+              // ignore poll errors
+            }
+          }, 4000);
+        }
+      }
+    } catch {
+      // Non-fatal — intelligence panel just stays hidden
+    } finally {
+      setIsLoadingIntelligence(false);
+    }
+  }, [intelligencePollRef]);
+
+  useEffect(() => {
+    if (recording?.recording_id && allowedRole !== "student") {
+      void loadIntelligence(recording.recording_id);
+    }
+    return () => {
+      if (intelligencePollRef.current) {
+        clearInterval(intelligencePollRef.current);
+        intelligencePollRef.current = null;
+      }
+    };
+  }, [recording?.recording_id, allowedRole, loadIntelligence]);
+
+  async function handleRegenerate() {
+    if (!recording) return;
+    try {
+      setIsRegenerating(true);
+      const data = await regenerateRecordingIntelligence(recording.recording_id);
+      setIntelligence(data);
+      // Start polling
+      if (!intelligencePollRef.current) {
+        intelligencePollRef.current = setInterval(async () => {
+          try {
+            const updated = await fetchRecordingIntelligence(recording.recording_id);
+            setIntelligence(updated);
+            if (updated.processing_status === "completed" || updated.processing_status === "failed") {
+              if (intelligencePollRef.current) {
+                clearInterval(intelligencePollRef.current);
+                intelligencePollRef.current = null;
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }, 4000);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsRegenerating(false);
+    }
+  }
 
   async function copyShareLink() {
     if (!recording) return;
@@ -115,6 +201,7 @@ export function RecordingPlayback({
           </p>
         </section>
       ) : (
+        <>
         <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
           <section className="glass-card rounded-2xl p-6">
             {hasVideo ? (
@@ -195,6 +282,92 @@ export function RecordingPlayback({
             ) : null}
           </section>
         </div>
+
+        {/* ── Recording Intelligence Panel ─────────────────────────── */}
+        {allowedRole !== "student" ? (
+          <section className="mt-6 glass-card rounded-2xl p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-[0.24em] text-violet-600">
+                  Recording Intelligence
+                </p>
+                <p className="mt-1 text-xs text-slate-400">AI-generated summary and highlights</p>
+              </div>
+              <div className="flex items-center gap-3">
+                {intelligence ? (
+                  <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                    intelligence.processing_status === "completed"
+                      ? "bg-emerald-100 text-emerald-700"
+                      : intelligence.processing_status === "processing" || intelligence.processing_status === "pending"
+                        ? "bg-blue-100 text-blue-700"
+                        : "bg-rose-100 text-rose-700"
+                  }`}>
+                    {intelligence.processing_status === "completed"
+                      ? intelligence.source_type === "ai" ? "AI Summary" : "Summary ready"
+                      : intelligence.processing_status === "processing"
+                        ? "Processing…"
+                        : intelligence.processing_status === "pending"
+                          ? "Pending"
+                          : "Failed"}
+                  </span>
+                ) : null}
+                {allowedRole === "teacher" ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleRegenerate()}
+                    disabled={isRegenerating || intelligence?.processing_status === "processing"}
+                    className="premium-button btn-secondary rounded-xl px-4 py-2 text-xs font-semibold disabled:opacity-50"
+                  >
+                    {isRegenerating ? "Regenerating…" : "Regenerate"}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            {isLoadingIntelligence && !intelligence ? (
+              <div className="mt-5 space-y-3">
+                <div className="h-4 w-3/4 animate-pulse rounded-xl bg-slate-100" />
+                <div className="h-4 w-1/2 animate-pulse rounded-xl bg-slate-100" />
+              </div>
+            ) : intelligence?.processing_status === "completed" && intelligence.summary ? (
+              <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                <div className="rounded-2xl border border-violet-100 bg-violet-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-600">
+                    Summary
+                  </p>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-700">{intelligence.summary}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                    Key Highlights
+                  </p>
+                  <ul className="mt-2 space-y-2">
+                    {intelligence.highlights.map((highlight, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
+                        <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400" />
+                        {highlight}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ) : intelligence?.processing_status === "pending" || intelligence?.processing_status === "processing" ? (
+              <div className="mt-5 flex items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-4 text-sm text-blue-700">
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+                Generating summary — this may take a moment after the recording uploads.
+              </div>
+            ) : intelligence?.processing_status === "failed" ? (
+              <div className="mt-5 rounded-2xl border border-rose-100 bg-rose-50 px-4 py-4 text-sm text-rose-700">
+                Summary generation failed. Click Regenerate to try again.
+              </div>
+            ) : (
+              <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-600">
+                No summary available yet. Upload a recording to generate AI insights.
+              </div>
+            )}
+          </section>
+        ) : null}
+        </>
       )}
     </DashboardShell>
   );
