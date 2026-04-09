@@ -198,7 +198,19 @@ export function LiveClassroomRoom({
 
   const dashboardPath =
     role === "teacher" ? "/teacher/dashboard" : "/student/dashboard";
-  const titlePrefix = role === "teacher" ? "Teacher Classroom" : "Student Classroom";
+
+  // True when a teacher joins a class they did not start (co-teacher)
+  const isCoTeacher =
+    role === "teacher" &&
+    !!session &&
+    !!classroom &&
+    session.email !== classroom.teacher_email;
+
+  const titlePrefix = role !== "teacher"
+    ? "Student Classroom"
+    : isCoTeacher
+      ? "Co-Teacher Classroom"
+      : "Teacher Classroom";
 
   usePageTitle(
     classroom ? `${titlePrefix} - ${classroom.title}` : `${titlePrefix} Loading`,
@@ -779,10 +791,12 @@ export function LiveClassroomRoom({
     }
 
     try {
-      if (role === "teacher") {
+      if (role === "teacher" && !isCoTeacher) {
+        // Primary teacher: broadcast end-class to all and mark session ended
         await publishRoomEndedNotice();
         await endLiveClass(classId, session.email);
       } else {
+        // Co-teacher or student: just leave quietly
         await unregisterPresence();
       }
     } catch (requestError) {
@@ -1018,11 +1032,16 @@ export function LiveClassroomRoom({
               <div className="inline-flex rounded-full bg-red-50 px-4 py-2 text-sm font-semibold text-red-600">
                 {classroom.status === "live" ? "Live" : classroom.status}
               </div>
+              {isCoTeacher ? (
+                <div className="inline-flex rounded-full bg-violet-100 px-4 py-2 text-sm font-semibold text-violet-700">
+                  Co-Teacher
+                </div>
+              ) : null}
               <div className="inline-flex rounded-full bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700">
                 {connectionState}
               </div>
               <AnimatePresence>
-                {role === "teacher" && isRecording ? (
+                {role === "teacher" && !isCoTeacher && isRecording ? (
                   <motion.div
                     key="rec-badge"
                     initial={{ opacity: 0, scale: 0.8 }}
@@ -1224,8 +1243,8 @@ export function LiveClassroomRoom({
                 <span className="text-[10px] font-medium leading-none">Participants</span>
               </motion.button>
 
-              {/* Record (teacher only) */}
-              {role === "teacher" ? (
+              {/* Record (primary teacher only — not co-teacher) */}
+              {role === "teacher" && !isCoTeacher ? (
                 <motion.button
                   type="button"
                   whileTap={{ scale: 0.88 }}
@@ -1271,7 +1290,7 @@ export function LiveClassroomRoom({
               >
                 <PhoneOffIcon className="h-5 w-5" />
                 <span className="text-[10px] font-medium leading-none">
-                  {role === "teacher" ? "End Class" : "Leave"}
+                  {role === "teacher" && !isCoTeacher ? "End Class" : "Leave"}
                 </span>
               </motion.button>
             </div>
