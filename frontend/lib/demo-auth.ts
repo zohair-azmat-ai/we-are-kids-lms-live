@@ -1,4 +1,14 @@
-export type UserRole = "admin" | "teacher" | "student";
+export type UserRole = "admin" | "teacher" | "main_teacher" | "assistant_teacher" | "student";
+
+/** Returns true for any role that has classroom teacher access. */
+export function isTeacherRole(role: UserRole): boolean {
+  return role === "teacher" || role === "main_teacher" || role === "assistant_teacher";
+}
+
+/** Returns true only for the primary/main classroom teacher. */
+export function isMainTeacherRole(role: UserRole): boolean {
+  return role === "teacher" || role === "main_teacher";
+}
 
 export type SessionUser = {
   user_id: string;

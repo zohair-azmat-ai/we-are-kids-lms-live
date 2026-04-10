@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 
 import { useAuth } from "@/components/auth-provider";
-import { type UserRole } from "@/lib/demo-auth";
+import { type UserRole, isTeacherRole } from "@/lib/demo-auth";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { AIAssistantChat } from "@/components/ai-assistant-chat";
 
@@ -41,10 +41,22 @@ export function DashboardShell({
       return;
     }
 
-    if (user.role !== allowedRole) {
-      router.replace(`/${user.role}/dashboard`);
+    // Teacher-group roles (main_teacher, assistant_teacher) are all allowed on teacher pages
+    const roleMatches =
+      allowedRole === "teacher"
+        ? isTeacherRole(user.role)
+        : user.role === allowedRole;
+
+    if (!roleMatches) {
+      const redirect = isTeacherRole(user.role) ? "/teacher/dashboard" : `/${user.role}/dashboard`;
+      router.replace(redirect);
     }
   }, [allowedRole, isLoading, router, user]);
+
+  const teacherLinks = [
+    { href: "/teacher/dashboard", label: "Overview" },
+    { href: "/teacher/recordings", label: "Recordings" },
+  ];
 
   const dashboardLinksByRole: Record<UserRole, Array<{ href: string; label: string }>> = {
     admin: [
@@ -56,24 +68,27 @@ export function DashboardShell({
       { href: "/admin/live-sessions", label: "Live Sessions" },
       { href: "/admin/recordings", label: "Recordings" },
     ],
-    teacher: [
-      { href: "/teacher/dashboard", label: "Overview" },
-      { href: "/teacher/recordings", label: "Recordings" },
-    ],
+    teacher: teacherLinks,
+    main_teacher: teacherLinks,
+    assistant_teacher: teacherLinks,
     student: [
       { href: "/student/dashboard", label: "Overview" },
       { href: "/student/recordings", label: "Recordings" },
     ],
   };
 
-  const dashboardLinks = dashboardLinksByRole[allowedRole];
+  const dashboardLinks = dashboardLinksByRole[user?.role ?? allowedRole] ?? dashboardLinksByRole[allowedRole];
 
   function handleLogout() {
     logout();
     router.replace("/login");
   }
 
-  if (isLoading || !user || user.role !== allowedRole) {
+  const roleMatches = user
+    ? allowedRole === "teacher" ? isTeacherRole(user.role) : user.role === allowedRole
+    : false;
+
+  if (isLoading || !user || !roleMatches) {
     return (
       <main className="min-h-screen">
         <div className="mx-auto max-w-7xl px-6 py-6 sm:px-8 lg:px-10">

@@ -48,6 +48,7 @@ export type LiveClassSession = {
   started_at?: string | null;
 };
 
+/** The two LiveKit-level roles — teacher-group users all get "teacher" tokens. */
 export type LiveKitRole = "teacher" | "student";
 
 export type LiveKitTokenResponse = {

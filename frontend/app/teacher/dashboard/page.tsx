@@ -19,6 +19,7 @@ import {
   type TeacherAnalyticsResponse,
 } from "@/lib/api";
 import { getRecordingStatus } from "@/lib/recordings";
+import { isMainTeacherRole, isTeacherRole } from "@/lib/demo-auth";
 
 /** Rejects functions, objects, empty strings, and any value that isn't a real
  *  non-empty class-id string. The `"anonymous"` guard catches the specific
@@ -95,7 +96,7 @@ export default function TeacherDashboardPage() {
   }, []);
 
   async function handleStartLiveClass() {
-    if (!user || user.role !== "teacher") {
+    if (!user || !isTeacherRole(user.role)) {
       router.replace("/login");
       return;
     }
@@ -151,20 +152,33 @@ export default function TeacherDashboardPage() {
           <p className="text-sm font-semibold uppercase tracking-[0.24em] text-red-500">
             Live Teaching
           </p>
-          <h2 className="mt-4 text-2xl font-semibold text-slate-800">
-            Ready to begin your next lesson
-          </h2>
-          <button
-            type="button"
-            onClick={handleStartLiveClass}
-            disabled={isStarting}
-            className="mt-6 inline-flex items-center justify-center rounded-full bg-red-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-red-100 disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {isStarting ? "Starting..." : "Start Live Class"}
-          </button>
-          {error ? (
-            <p className="mt-4 text-sm text-red-600">{error}</p>
-          ) : null}
+          {user && isMainTeacherRole(user.role) ? (
+            <>
+              <h2 className="mt-4 text-2xl font-semibold text-slate-800">
+                Ready to begin your next lesson
+              </h2>
+              <button
+                type="button"
+                onClick={handleStartLiveClass}
+                disabled={isStarting}
+                className="mt-6 inline-flex items-center justify-center rounded-full bg-red-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-red-100 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isStarting ? "Starting..." : "Start Live Class"}
+              </button>
+              {error ? (
+                <p className="mt-4 text-sm text-red-600">{error}</p>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <h2 className="mt-4 text-2xl font-semibold text-slate-800">
+                Join a live class in progress
+              </h2>
+              <p className="mt-2 text-sm text-slate-500">
+                As an assistant teacher, you can join any active class as a co-teacher. Active sessions appear below.
+              </p>
+            </>
+          )}
           <button
             type="button"
             onClick={() => router.push("/teacher/recordings")}
