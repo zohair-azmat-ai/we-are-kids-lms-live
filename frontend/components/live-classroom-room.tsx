@@ -232,6 +232,9 @@ export function LiveClassroomRoom({
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [screenShareStream, setScreenShareStream] = useState<MediaStream | null>(null);
   const [remoteScreenShareStream, setRemoteScreenShareStream] = useState<MediaStream | null>(null);
+  // Smart moderation
+  const [noisyParticipants, setNoisyParticipants] = useState<Set<string>>(new Set()); // identity
+  const [mutedByTeacher, setMutedByTeacher] = useState<Set<string>>(new Set()); // identity
 
   const roomRef = useRef<Room | null>(null);
   const classroomRef = useRef<LiveClassSession | null>(null);
@@ -246,6 +249,14 @@ export function LiveClassroomRoom({
   const recordingSessionIdRef = useRef<string | null>(null);
   const audioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  // Map: track.sid → { analyser, identity }
+  const audioAnalysersRef = useRef<Map<string, { analyser: AnalyserNode; identity: string }>>(new Map());
+  // Map: identity → consecutive-noisy-sample count
+  const noiseCountersRef = useRef<Map<string, number>>(new Map());
+  // Map: identity → mute cooldown (timestamp ms)
+  const muteCooldownRef = useRef<Map<string, number>>(new Map());
+  const noiseIntervalRef = useRef<number | null>(null);
 
   const dashboardPath =
     role === "teacher" ? "/teacher/dashboard" : "/student/dashboard";
@@ -608,12 +619,23 @@ export function LiveClassroomRoom({
         return;
       }
 
+      // Guard: classId must be a non-empty string — reject anything that got
+      // stringified from a function reference or other invalid value.
+      if (!classId || typeof classId !== "string" || classId.trim().length === 0) {
+        console.error("[LiveClassroomRoom] Invalid classId received:", classId);
+        setError("Invalid classroom session. Please return to your dashboard and start a new class.");
+        setIsLoading(false);
+        return;
+      }
+
       if (!user || user.role !== role) {
         router.replace("/login");
         return;
       }
 
       setSession(user);
+
+      console.log("[LiveClassroomRoom] Connecting to classroom:", classId);
 
       try {
         const classroomSession = await fetchClassSession(classId);
@@ -682,7 +704,7 @@ export function LiveClassroomRoom({
           .on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
             setActiveSpeakerIdentities(new Set(speakers.map((s) => s.identity)));
           })
-          .on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
+          .on(RoomEvent.TrackSubscribed, (track: RemoteTrack, _pub: unknown, participant: Participant) => {
             if (track.kind === Track.Kind.Audio && track.mediaStreamTrack && track.sid) {
               const audioEl = document.createElement("audio");
               audioEl.srcObject = new MediaStream([track.mediaStreamTrack]);
@@ -692,6 +714,21 @@ export function LiveClassroomRoom({
               });
               document.body.appendChild(audioEl);
               audioElementsRef.current.set(track.sid, audioEl);
+
+              // Wire up AnalyserNode for noise detection
+              try {
+                if (!audioContextRef.current) {
+                  audioContextRef.current = new AudioContext();
+                }
+                const ctx = audioContextRef.current;
+                const source = ctx.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
+                const analyser = ctx.createAnalyser();
+                analyser.fftSize = 256;
+                source.connect(analyser);
+                audioAnalysersRef.current.set(track.sid, { analyser, identity: participant.identity });
+              } catch {
+                // AudioContext not available — moderation disabled
+              }
             } else if (
               track.source === Track.Source.ScreenShare &&
               track.mediaStreamTrack
@@ -708,6 +745,7 @@ export function LiveClassroomRoom({
                 audioEl.remove();
                 audioElementsRef.current.delete(track.sid);
               }
+              audioAnalysersRef.current.delete(track.sid);
             } else if (track.source === Track.Source.ScreenShare) {
               setRemoteScreenShareStream(null);
             }
@@ -740,7 +778,21 @@ export function LiveClassroomRoom({
             try {
               const parsed = JSON.parse(new TextDecoder().decode(payload)) as Record<string, unknown>;
 
-              if (parsed.type === "room-ended") {
+              if (parsed.type === "mute-request") {
+                const targetIdentity = parsed.targetIdentity as string;
+                // Only mute ourselves if we are the target and we're a student
+                if (session?.email === targetIdentity && role === "student") {
+                  void (async () => {
+                    try {
+                      await roomRef.current?.localParticipant.setMicrophoneEnabled(false);
+                      setMicEnabled(false);
+                      setMutedByTeacher((prev) => new Set([...prev, targetIdentity]));
+                    } catch {
+                      // ignore
+                    }
+                  })();
+                }
+              } else if (parsed.type === "room-ended") {
                 handleRemoteRoomEnded(
                   (parsed.message as string | undefined) ?? "The teacher ended this class session.",
                 );
@@ -779,7 +831,17 @@ export function LiveClassroomRoom({
             }
           });
 
-        await room.connect(liveKitUrl, tokenResponse.token);
+        console.log("[LiveClassroomRoom] Connecting to LiveKit room:", classId, "url:", liveKitUrl);
+
+        try {
+          await room.connect(liveKitUrl, tokenResponse.token);
+        } catch (connectError) {
+          throw new Error(
+            connectError instanceof Error
+              ? `Failed to connect to classroom "${classId}": ${connectError.message}`
+              : `Failed to connect to classroom "${classId}".`,
+          );
+        }
 
         try {
           await room.localParticipant.setCameraEnabled(true);
@@ -858,12 +920,70 @@ export function LiveClassroomRoom({
       });
       audioElementsRef.current.clear();
 
+      // Cleanup noise detection
+      if (noiseIntervalRef.current) {
+        window.clearInterval(noiseIntervalRef.current);
+        noiseIntervalRef.current = null;
+      }
+      audioAnalysersRef.current.clear();
+      if (audioContextRef.current) {
+        void audioContextRef.current.close().catch(() => {});
+        audioContextRef.current = null;
+      }
+
       if (roomRef.current) {
         roomRef.current.disconnect();
         roomRef.current = null;
       }
     };
   }, [classId, role, router, user, isAuthLoading]);
+
+  // Noise detection — teacher-side only, runs every 800ms
+  useEffect(() => {
+    if (role !== "teacher" || connectionState !== "connected") {
+      return;
+    }
+
+    const NOISY_THRESHOLD = 0.04;   // RMS amplitude threshold
+    const NOISY_COUNT_LIMIT = 4;    // consecutive samples before flagging
+    const COOLDOWN_MS = 20_000;     // 20 s between mute actions per participant
+
+    noiseIntervalRef.current = window.setInterval(() => {
+      const data = new Float32Array(128);
+      const nextNoisy = new Set<string>();
+
+      audioAnalysersRef.current.forEach(({ analyser, identity }) => {
+        analyser.getFloatTimeDomainData(data);
+        // RMS
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          sum += data[i] * data[i];
+        }
+        const rms = Math.sqrt(sum / data.length);
+
+        if (rms > NOISY_THRESHOLD) {
+          const count = (noiseCountersRef.current.get(identity) ?? 0) + 1;
+          noiseCountersRef.current.set(identity, count);
+          if (count >= NOISY_COUNT_LIMIT) {
+            nextNoisy.add(identity);
+          }
+        } else {
+          // Decay counter when quiet
+          const count = Math.max(0, (noiseCountersRef.current.get(identity) ?? 0) - 1);
+          noiseCountersRef.current.set(identity, count);
+        }
+      });
+
+      setNoisyParticipants(nextNoisy);
+    }, 800);
+
+    return () => {
+      if (noiseIntervalRef.current) {
+        window.clearInterval(noiseIntervalRef.current);
+        noiseIntervalRef.current = null;
+      }
+    };
+  }, [role, connectionState]);
 
   // Auto-scroll chat to bottom on new messages
   useEffect(() => {
@@ -876,6 +996,38 @@ export function LiveClassroomRoom({
       setUnreadChat(0);
     }
   }, [showChat]);
+
+  async function requestMuteParticipant(targetIdentity: string) {
+    if (!roomRef.current || role !== "teacher") {
+      return;
+    }
+
+    const now = Date.now();
+    const cooldown = muteCooldownRef.current.get(targetIdentity) ?? 0;
+
+    if (now < cooldown) {
+      return; // still in cooldown
+    }
+
+    muteCooldownRef.current.set(targetIdentity, now + 20_000);
+
+    try {
+      const payload = new TextEncoder().encode(
+        JSON.stringify({ type: "mute-request", targetIdentity }),
+      );
+      await roomRef.current.localParticipant.publishData(payload, { reliable: true });
+
+      // Clear the noisy flag for this participant
+      setNoisyParticipants((prev) => {
+        const next = new Set(prev);
+        next.delete(targetIdentity);
+        return next;
+      });
+      noiseCountersRef.current.set(targetIdentity, 0);
+    } catch {
+      // Non-fatal
+    }
+  }
 
   async function toggleRaiseHand() {
     if (!roomRef.current || !session) {
@@ -1450,6 +1602,19 @@ export function LiveClassroomRoom({
             </motion.div>
           ) : null}
 
+          {role === "student" && mutedByTeacher.size > 0 && !micEnabled ? (
+            <motion.div
+              key="muted-banner"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="mt-4 rounded-[1.5rem] border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800"
+            >
+              Your microphone was muted by the teacher to reduce background noise. You can unmute yourself when ready.
+            </motion.div>
+          ) : null}
+
           {deviceMessage ? (
             <motion.div
               key="device-banner"
@@ -1827,25 +1992,39 @@ export function LiveClassroomRoom({
                   {studentTiles.length ? (
                     studentTiles.map((participant) => {
                       const hasHandRaised = raisedHands.has(participant.identity);
+                      const isNoisy = noisyParticipants.has(participant.identity);
+                      const isSpeaking = activeSpeakerIdentities.has(participant.identity);
                       return (
                         <motion.div
                           key={participant.identity}
                           variants={fadeUp}
                           className={`flex items-center justify-between rounded-2xl border px-4 py-3 ${
-                            hasHandRaised
-                              ? "border-amber-200 bg-amber-50"
-                              : "border-slate-100 bg-slate-50"
+                            isNoisy && !isSpeaking
+                              ? "border-red-200 bg-red-50"
+                              : hasHandRaised
+                                ? "border-amber-200 bg-amber-50"
+                                : "border-slate-100 bg-slate-50"
                           }`}
                         >
                           <div className="flex min-w-0 items-center gap-2">
-                            {activeSpeakerIdentities.has(participant.identity) ? (
+                            {isSpeaking ? (
                               <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-green-500" />
                             ) : (
                               <span className="h-2 w-2 shrink-0 rounded-full bg-slate-300" />
                             )}
                             <span className="truncate text-sm text-slate-700">{participant.name}</span>
                             <AnimatePresence>
-                              {hasHandRaised ? (
+                              {isNoisy && !isSpeaking ? (
+                                <motion.span
+                                  key="noise"
+                                  initial={{ scale: 0, opacity: 0 }}
+                                  animate={{ scale: 1, opacity: 1 }}
+                                  exit={{ scale: 0, opacity: 0 }}
+                                  className="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-600"
+                                >
+                                  Noise
+                                </motion.span>
+                              ) : hasHandRaised ? (
                                 <motion.span
                                   key="hand"
                                   initial={{ scale: 0, opacity: 0 }}
@@ -1858,13 +2037,24 @@ export function LiveClassroomRoom({
                               ) : null}
                             </AnimatePresence>
                           </div>
-                          <div className="flex shrink-0 items-center gap-2 pl-2">
+                          <div className="flex shrink-0 items-center gap-1.5 pl-2">
                             {participant.micEnabled
                               ? <MicIcon className="h-4 w-4 text-emerald-500" />
                               : <MicOffIcon className="h-4 w-4 text-red-400" />}
                             {participant.cameraEnabled
                               ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
                               : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
+                            {participant.micEnabled ? (
+                              <motion.button
+                                type="button"
+                                whileTap={{ scale: 0.88 }}
+                                onClick={() => void requestMuteParticipant(participant.identity)}
+                                title="Mute this student"
+                                className="rounded-lg bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-200 transition-colors"
+                              >
+                                Mute
+                              </motion.button>
+                            ) : null}
                           </div>
                         </motion.div>
                       );

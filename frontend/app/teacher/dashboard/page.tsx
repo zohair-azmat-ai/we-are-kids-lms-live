@@ -91,6 +91,14 @@ export default function TeacherDashboardPage() {
       setError("");
 
       const classroom = await startLiveClass(user.email);
+
+      if (!classroom.class_id || typeof classroom.class_id !== "string") {
+        throw new Error(
+          `Server returned an invalid classroom ID: ${String(classroom.class_id)}`,
+        );
+      }
+
+      console.log("[Dashboard] Starting live class, navigating to:", classroom.class_id);
       router.push(`/teacher/classroom/${classroom.class_id}`);
     } catch (requestError) {
       setError(

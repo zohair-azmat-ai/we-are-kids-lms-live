@@ -75,6 +75,15 @@ export type RecordingUpdateResponse = {
   recording: RecordingItem;
 };
 
+export type RecordingIntelligence = {
+  recording_id: string;
+  summary: string;
+  highlights: string[];
+  processing_status: "pending" | "processing" | "completed" | "failed";
+  generated_at: string | null;
+  source_type: string;
+};
+
 export type RecordingDeleteResponse = {
   success: boolean;
 };
@@ -723,6 +732,26 @@ export async function deleteRecording(
     `/api/v1/recordings/${recordingId}`,
     { method: "DELETE" },
     "Recording delete failed.",
+  );
+}
+
+export async function fetchRecordingIntelligence(
+  recordingId: string,
+): Promise<RecordingIntelligence> {
+  return requestJson<RecordingIntelligence>(
+    `/api/v1/recordings/${recordingId}/intelligence`,
+    { cache: "no-store" },
+    "Recording intelligence request failed.",
+  );
+}
+
+export async function regenerateRecordingIntelligence(
+  recordingId: string,
+): Promise<RecordingIntelligence> {
+  return requestJson<RecordingIntelligence>(
+    `/api/v1/recordings/${recordingId}/intelligence/regenerate`,
+    { method: "POST" },
+    "Recording intelligence regeneration failed.",
   );
 }
 
