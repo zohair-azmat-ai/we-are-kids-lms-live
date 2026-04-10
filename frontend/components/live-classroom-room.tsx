@@ -619,12 +619,23 @@ export function LiveClassroomRoom({
         return;
       }
 
+      // Guard: classId must be a non-empty string — reject anything that got
+      // stringified from a function reference or other invalid value.
+      if (!classId || typeof classId !== "string" || classId.trim().length === 0) {
+        console.error("[LiveClassroomRoom] Invalid classId received:", classId);
+        setError("Invalid classroom session. Please return to your dashboard and start a new class.");
+        setIsLoading(false);
+        return;
+      }
+
       if (!user || user.role !== role) {
         router.replace("/login");
         return;
       }
 
       setSession(user);
+
+      console.log("[LiveClassroomRoom] Connecting to classroom:", classId);
 
       try {
         const classroomSession = await fetchClassSession(classId);
@@ -820,7 +831,17 @@ export function LiveClassroomRoom({
             }
           });
 
-        await room.connect(liveKitUrl, tokenResponse.token);
+        console.log("[LiveClassroomRoom] Connecting to LiveKit room:", classId, "url:", liveKitUrl);
+
+        try {
+          await room.connect(liveKitUrl, tokenResponse.token);
+        } catch (connectError) {
+          throw new Error(
+            connectError instanceof Error
+              ? `Failed to connect to classroom "${classId}": ${connectError.message}`
+              : `Failed to connect to classroom "${classId}".`,
+          );
+        }
 
         try {
           await room.localParticipant.setCameraEnabled(true);
