@@ -1,7 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
 
-import { BackendStatus } from "@/components/backend-status";
 import { SiteHeader } from "@/components/site-header";
 
 const trustItems = [
@@ -418,10 +417,6 @@ export default function HomePage() {
             ))}
           </div>
         </section>
-
-        <div className="mt-12">
-          <BackendStatus />
-        </div>
 
         <footer className="mt-16 rounded-[2.5rem] bg-slate-800 px-5 py-8 text-white sm:px-8 sm:py-10 lg:px-10">
           <div className="grid gap-10 lg:grid-cols-[1.1fr_0.7fr_0.7fr_0.9fr]">
