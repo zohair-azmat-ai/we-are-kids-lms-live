@@ -80,13 +80,15 @@ export function RecordingPlayback({
         const recordingItem = await fetchRecording(params.recordingId);
 
         if (allowedRole === "teacher") {
-          if (!["teacher", "main_teacher", "assistant_teacher"].includes(user.role)) {
+          const role = user?.role;
+
+          if (!role || !["teacher", "main_teacher", "assistant_teacher"].includes(role)) {
             setError("Unable to verify teacher access for this recording.");
             setRecording(null);
             return;
           }
 
-          if (recordingItem.teacher !== user.name) {
+          if (recordingItem.teacher !== user?.name) {
             setError("You can only watch your own recordings.");
             setRecording(null);
             return;
