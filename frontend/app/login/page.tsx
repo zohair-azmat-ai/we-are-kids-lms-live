@@ -17,7 +17,7 @@ import { loginWithPassword } from "@/lib/api";
 
 const roles: { value: UserRole; label: string; email: string }[] = [
   { value: "admin",             label: "Admin",             email: "admin@wearekids.com" },
-  { value: "main_teacher",      label: "Main Teacher",      email: "hina@wearekids.com" },
+  { value: "main_teacher",      label: "Main Teacher",      email: "hend@wearekids.com" },
   { value: "assistant_teacher", label: "Assistant Teacher", email: "grace@wearekids.com" },
   { value: "student",           label: "Student",           email: "student1@wearekids.com" },
 ];
@@ -156,7 +156,7 @@ export default function LoginPage() {
                 </p>
                 <div className="mt-4 space-y-2 text-sm text-slate-600">
                   <p><span className="font-medium text-slate-700">Admin:</span> admin@wearekids.com</p>
-                  <p><span className="font-medium text-blue-700">Main Teachers:</span> hina@wearekids.com · narmeen@wearekids.com</p>
+                  <p><span className="font-medium text-blue-700">Main Teachers:</span> hend@wearekids.com · narmeen@wearekids.com</p>
                   <p><span className="font-medium text-violet-700">Assistants:</span> grace@wearekids.com · may@wearekids.com · tonet@wearekids.com · jane@wearekids.com · liza@wearekids.com</p>
                   <p><span className="font-medium text-slate-700">Students:</span> student1@wearekids.com · student2@wearekids.com</p>
                 </div>

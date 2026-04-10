@@ -641,13 +641,25 @@ export function LiveClassroomRoom({
         return;
       }
 
-      if (!user || user.role !== role) {
+      if (!user) {
+        router.replace("/login");
+        return;
+      }
+
+      // For teacher-group roles, accept any teacher-group user (main_teacher, assistant_teacher).
+      // For student role, require exact match.
+      const userRoleValid = isTeacherRole(role)
+        ? isTeacherRole(user.role)
+        : user.role === role;
+
+      if (!userRoleValid) {
         router.replace("/login");
         return;
       }
 
       setSession(user);
 
+      console.log("[Classroom Route] role:", role, "classId:", classId);
       console.log("[LiveClassroomRoom] Connecting to classroom:", classId);
 
       try {
