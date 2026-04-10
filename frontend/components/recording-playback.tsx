@@ -59,7 +59,7 @@ export function RecordingPlayback({
         const recordingItem = await fetchRecording(params.recordingId);
 
         if (allowedRole === "teacher") {
-          if (!user || user.role !== "teacher") {
+          if (!user || !["teacher", "main_teacher", "assistant_teacher"].includes(user.role)) {
             setError("Unable to verify teacher access for this recording.");
             setRecording(null);
             return;

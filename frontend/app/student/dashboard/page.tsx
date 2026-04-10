@@ -7,6 +7,16 @@ import { useAuth } from "@/components/auth-provider";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { fetchLiveClasses, fetchRecordings, type RecordingItem } from "@/lib/api";
 
+function isValidClassId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    !value.includes("anonymous") &&
+    !value.startsWith("[object") &&
+    !value.startsWith("function")
+  );
+}
+
 export default function StudentDashboardPage() {
   const router = useRouter();
   const { user } = useAuth();
@@ -47,13 +57,22 @@ export default function StudentDashboardPage() {
       setError("");
 
       const liveClasses = await fetchLiveClasses();
+      console.log("[StudentDashboard] fetchLiveClasses response:", liveClasses);
 
       if (!liveClasses.length) {
         setError("No live class is available right now.");
         return;
       }
 
-      router.push(`/student/classroom/${liveClasses[0].class_id}`);
+      const targetClassId = liveClasses[0].class_id;
+      if (!isValidClassId(targetClassId)) {
+        console.error("[StudentDashboard] Invalid class_id from live classes:", targetClassId);
+        setError("Unable to join: the classroom ID returned by the server is invalid.");
+        return;
+      }
+
+      console.log("[StudentDashboard] Joining classroom:", targetClassId);
+      router.push(`/student/classroom/${targetClassId}`);
     } catch (requestError) {
       setError(
         requestError instanceof Error

@@ -11,16 +11,22 @@ import { Spinner } from "@/components/ui-state";
 import { usePageTitle } from "@/hooks/use-page-title";
 import {
   type UserRole,
+  isTeacherRole,
 } from "@/lib/demo-auth";
 import { loginWithPassword } from "@/lib/api";
 
-const roles: UserRole[] = ["admin", "teacher", "student"];
+const roles: { value: UserRole; label: string; email: string }[] = [
+  { value: "admin",             label: "Admin",             email: "admin@wearekids.com" },
+  { value: "main_teacher",      label: "Main Teacher",      email: "hend@wearekids.com" },
+  { value: "assistant_teacher", label: "Assistant Teacher", email: "grace@wearekids.com" },
+  { value: "student",           label: "Student",           email: "student1@wearekids.com" },
+];
 
-const roleRedirects: Record<UserRole, string> = {
-  admin: "/admin/dashboard",
-  teacher: "/teacher/dashboard",
-  student: "/student/dashboard",
-};
+function roleToRoute(role: UserRole): string {
+  if (role === "admin") return "/admin/dashboard";
+  if (isTeacherRole(role)) return "/teacher/dashboard";
+  return "/student/dashboard";
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -35,20 +41,15 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isLoading && user) {
-      router.replace(roleRedirects[user.role]);
+      router.replace(roleToRoute(user.role));
     }
   }, [isLoading, router, user]);
 
   function handleRoleChange(nextRole: UserRole) {
+    const config = roles.find((r) => r.value === nextRole);
     setRole(nextRole);
     setError("");
-    setEmail(
-      nextRole === "admin"
-        ? "admin@wearekids.com"
-        : nextRole === "teacher"
-          ? "teacher1@wearekids.com"
-          : "student1@wearekids.com",
-    );
+    setEmail(config?.email ?? "");
     setPassword("123456");
   }
 
@@ -78,7 +79,7 @@ export default function LoginPage() {
         role,
       });
       login(session);
-      router.push(roleRedirects[session.user.role]);
+      router.push(roleToRoute(session.user.role));
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -132,31 +133,32 @@ export default function LoginPage() {
                 the right nursery workspace.
               </p>
 
-              <div className="mt-8 grid gap-3 sm:grid-cols-3">
+              <div className="mt-8 grid gap-3 sm:grid-cols-2">
                 {roles.map((item) => (
                   <button
-                    key={item}
+                    key={item.value}
                     type="button"
-                    onClick={() => handleRoleChange(item)}
-                    className={`rounded-2xl px-4 py-4 text-sm font-semibold capitalize transition ${
-                      role === item
+                    onClick={() => handleRoleChange(item.value)}
+                    className={`rounded-2xl px-4 py-4 text-sm font-semibold transition ${
+                      role === item.value
                         ? "bg-blue-600 text-white shadow-lg shadow-blue-100"
                         : "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-white"
                     }`}
                   >
-                    {item}
+                    {item.label}
                   </button>
                 ))}
               </div>
 
               <div className="mt-10 rounded-[2rem] border border-slate-100 bg-slate-50 p-5">
                 <p className="text-sm font-semibold text-slate-800">
-                  Seeded starter accounts
+                  Demo accounts — password: 123456
                 </p>
-                <div className="mt-4 space-y-3 text-sm text-slate-600">
-                  <p>admin@wearekids.com / 123456 / admin</p>
-                  <p>teacher1@wearekids.com / 123456 / teacher</p>
-                  <p>student1@wearekids.com / 123456 / student</p>
+                <div className="mt-4 space-y-2 text-sm text-slate-600">
+                  <p><span className="font-medium text-slate-700">Admin:</span> admin@wearekids.com</p>
+                  <p><span className="font-medium text-blue-700">Main Teachers:</span> hend@wearekids.com · narmeen@wearekids.com</p>
+                  <p><span className="font-medium text-violet-700">Assistants:</span> grace@wearekids.com · may@wearekids.com · tonet@wearekids.com · jane@wearekids.com · liza@wearekids.com</p>
+                  <p><span className="font-medium text-slate-700">Students:</span> student1@wearekids.com · student2@wearekids.com</p>
                 </div>
               </div>
             </div>

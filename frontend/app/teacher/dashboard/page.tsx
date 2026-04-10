@@ -19,6 +19,21 @@ import {
   type TeacherAnalyticsResponse,
 } from "@/lib/api";
 import { getRecordingStatus } from "@/lib/recordings";
+import { isMainTeacherRole, isTeacherRole } from "@/lib/demo-auth";
+
+/** Rejects functions, objects, empty strings, and any value that isn't a real
+ *  non-empty class-id string. The `"anonymous"` guard catches the specific
+ *  "%3Canonymous%20code%3E" pollution seen when a function ref leaks into a
+ *  template literal in some bundler environments. */
+function isValidClassId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    !value.includes("anonymous") &&
+    !value.startsWith("[object") &&
+    !value.startsWith("function")
+  );
+}
 
 export default function TeacherDashboardPage() {
   const router = useRouter();
@@ -81,7 +96,7 @@ export default function TeacherDashboardPage() {
   }, []);
 
   async function handleStartLiveClass() {
-    if (!user || user.role !== "teacher") {
+    if (!user || !isTeacherRole(user.role)) {
       router.replace("/login");
       return;
     }
@@ -91,14 +106,15 @@ export default function TeacherDashboardPage() {
       setError("");
 
       const classroom = await startLiveClass(user.email);
+      console.log("[Dashboard] startLiveClass response:", classroom);
 
-      if (!classroom.class_id || typeof classroom.class_id !== "string") {
+      if (!isValidClassId(classroom.class_id)) {
         throw new Error(
           `Server returned an invalid classroom ID: ${String(classroom.class_id)}`,
         );
       }
 
-      console.log("[Dashboard] Starting live class, navigating to:", classroom.class_id);
+      console.log("[Dashboard] Navigating to classroom:", classroom.class_id);
       router.push(`/teacher/classroom/${classroom.class_id}`);
     } catch (requestError) {
       setError(
@@ -136,20 +152,33 @@ export default function TeacherDashboardPage() {
           <p className="text-sm font-semibold uppercase tracking-[0.24em] text-red-500">
             Live Teaching
           </p>
-          <h2 className="mt-4 text-2xl font-semibold text-slate-800">
-            Ready to begin your next lesson
-          </h2>
-          <button
-            type="button"
-            onClick={handleStartLiveClass}
-            disabled={isStarting}
-            className="mt-6 inline-flex items-center justify-center rounded-full bg-red-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-red-100 disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {isStarting ? "Starting..." : "Start Live Class"}
-          </button>
-          {error ? (
-            <p className="mt-4 text-sm text-red-600">{error}</p>
-          ) : null}
+          {user && isMainTeacherRole(user.role) ? (
+            <>
+              <h2 className="mt-4 text-2xl font-semibold text-slate-800">
+                Ready to begin your next lesson
+              </h2>
+              <button
+                type="button"
+                onClick={handleStartLiveClass}
+                disabled={isStarting}
+                className="mt-6 inline-flex items-center justify-center rounded-full bg-red-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-red-100 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isStarting ? "Starting..." : "Start Live Class"}
+              </button>
+              {error ? (
+                <p className="mt-4 text-sm text-red-600">{error}</p>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <h2 className="mt-4 text-2xl font-semibold text-slate-800">
+                Join a live class in progress
+              </h2>
+              <p className="mt-2 text-sm text-slate-500">
+                As an assistant teacher, you can join any active class as a co-teacher. Active sessions appear below.
+              </p>
+            </>
+          )}
           <button
             type="button"
             onClick={() => router.push("/teacher/recordings")}
@@ -197,7 +226,14 @@ export default function TeacherDashboardPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => router.push(`/teacher/classroom/${session.class_id}`)}
+                    onClick={() => {
+                      console.log("[Dashboard] Live Now join — session:", session);
+                      if (!isValidClassId(session.class_id)) {
+                        console.error("[Dashboard] Invalid class_id on live session:", session.class_id);
+                        return;
+                      }
+                      router.push(`/teacher/classroom/${session.class_id}`);
+                    }}
                     className="inline-flex w-full items-center justify-center rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-600 sm:w-auto"
                   >
                     {isOwnSession ? "Rejoin Class" : "Join as Co-Teacher"}

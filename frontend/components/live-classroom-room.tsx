@@ -9,7 +9,7 @@ import { useAuth } from "@/components/auth-provider";
 import { LoadingPanel, Spinner } from "@/components/ui-state";
 import { VideoTile } from "@/components/video-tile";
 import { usePageTitle } from "@/hooks/use-page-title";
-import { type SessionUser, type UserRole } from "@/lib/demo-auth";
+import { type SessionUser, type UserRole, isMainTeacherRole, isTeacherRole } from "@/lib/demo-auth";
 import {
   endLiveClass,
   fetchClassSession,
@@ -118,7 +118,7 @@ function MonitorIcon({ className }: { className?: string }) {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type ClassroomRole = Extract<UserRole, "teacher" | "student">;
+type ClassroomRole = Extract<UserRole, "teacher" | "main_teacher" | "assistant_teacher" | "student">;
 
 type LiveClassroomRoomProps = {
   classId: string;
@@ -230,13 +230,19 @@ export function LiveClassroomRoom({
   const [unreadChat, setUnreadChat] = useState(0);
   // Screen share
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [isRequestingScreenShare, setIsRequestingScreenShare] = useState(false);
   const [screenShareStream, setScreenShareStream] = useState<MediaStream | null>(null);
   const [remoteScreenShareStream, setRemoteScreenShareStream] = useState<MediaStream | null>(null);
+  // Whether the browser/device supports screen sharing
+  const supportsScreenShare = typeof navigator !== "undefined" && "mediaDevices" in navigator && typeof (navigator.mediaDevices as MediaDevices & { getDisplayMedia?: unknown }).getDisplayMedia === "function";
   // Smart moderation
   const [noisyParticipants, setNoisyParticipants] = useState<Set<string>>(new Set()); // identity
   const [mutedByTeacher, setMutedByTeacher] = useState<Set<string>>(new Set()); // identity
 
   const roomRef = useRef<Room | null>(null);
+  // Prevents double-initialization when the auth user object gets a new reference
+  // (same data, different identity) during a React re-render cycle.
+  const hasInitializedRef = useRef(false);
   const classroomRef = useRef<LiveClassSession | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<number | null>(null);
@@ -261,18 +267,31 @@ export function LiveClassroomRoom({
   const dashboardPath =
     role === "teacher" ? "/teacher/dashboard" : "/student/dashboard";
 
-  // True when a teacher joins a class they did not start (co-teacher)
+  // True when a teacher joins a class they did not start (co-teacher / assistant)
   const isCoTeacher =
-    role === "teacher" &&
+    isTeacherRole(role) &&
     !!session &&
     !!classroom &&
     session.email !== classroom.teacher_email;
 
-  const titlePrefix = role !== "teacher"
+  // True only for the classroom's primary (main) teacher
+  const isMainTeacher =
+    isTeacherRole(role) &&
+    !!session &&
+    !!classroom &&
+    session.email === classroom.teacher_email &&
+    isMainTeacherRole(session.role);
+
+  // True for assistant teachers (regardless of classroom ownership)
+  const isAssistantTeacher = session?.role === "assistant_teacher";
+
+  const titlePrefix = !isTeacherRole(role)
     ? "Student Classroom"
-    : isCoTeacher
-      ? "Co-Teacher Classroom"
-      : "Teacher Classroom";
+    : isAssistantTeacher
+      ? "Assistant Classroom"
+      : isCoTeacher
+        ? "Co-Teacher Classroom"
+        : "Teacher Classroom";
 
   usePageTitle(
     classroom ? `${titlePrefix} - ${classroom.title}` : `${titlePrefix} Loading`,
@@ -288,7 +307,7 @@ export function LiveClassroomRoom({
       name: session.name,
       stream: localStream,
       isLocal: true,
-      isTeacher: role === "teacher",
+      isTeacher: isTeacherRole(role),
       micEnabled,
       cameraEnabled,
     };
@@ -430,7 +449,7 @@ export function LiveClassroomRoom({
   }
 
   async function startRecording() {
-    if (role !== "teacher") {
+    if (!isMainTeacher) {
       return;
     }
 
@@ -574,7 +593,7 @@ export function LiveClassroomRoom({
     try {
       const updatedClassroom = await joinClassPresence({
         classId,
-        role,
+        role: isTeacherRole(role) ? "teacher" : "student",
         participantEmail: session.email,
         participantName: session.name,
       });
@@ -594,7 +613,7 @@ export function LiveClassroomRoom({
     try {
       await leaveClassPresence({
         classId,
-        role,
+        role: isTeacherRole(role) ? "teacher" : "student",
         participantEmail: session.email,
         participantName: session.name,
       });
@@ -615,26 +634,49 @@ export function LiveClassroomRoom({
 
   useEffect(() => {
     async function initializeRoom() {
+      // Defer until auth has settled — avoids acting on a stale null user.
       if (isAuthLoading) {
+        console.log("[Classroom] Auth still loading, waiting...");
         return;
       }
 
-      // Guard: classId must be a non-empty string — reject anything that got
-      // stringified from a function reference or other invalid value.
+      // Prevent double-initialization when the auth user object is recreated
+      // with the same data (new reference) on re-render.
+      if (hasInitializedRef.current) {
+        return;
+      }
+
+      // Guard: classId must be a non-empty string.
       if (!classId || typeof classId !== "string" || classId.trim().length === 0) {
-        console.error("[LiveClassroomRoom] Invalid classId received:", classId);
+        console.error("[Classroom] Invalid classId:", classId);
         setError("Invalid classroom session. Please return to your dashboard and start a new class.");
         setIsLoading(false);
         return;
       }
 
-      if (!user || user.role !== role) {
+      if (!user) {
+        console.log("[Classroom] No user after auth settled — redirecting to login");
         router.replace("/login");
         return;
       }
 
+      // For teacher-group roles, accept any teacher-group user (main_teacher, assistant_teacher).
+      // For student role, require exact match.
+      const userRoleValid = isTeacherRole(role)
+        ? isTeacherRole(user.role)
+        : user.role === role;
+
+      if (!userRoleValid) {
+        console.log("[Classroom] Role mismatch — user.role:", user.role, "required:", role, "— redirecting");
+        router.replace("/login");
+        return;
+      }
+
+      hasInitializedRef.current = true;
+
       setSession(user);
 
+      console.log("[Classroom Route] role:", role, "classId:", classId);
       console.log("[LiveClassroomRoom] Connecting to classroom:", classId);
 
       try {
@@ -653,7 +695,7 @@ export function LiveClassroomRoom({
           roomName: classId,
           participantName: user.name,
           participantEmail: user.email,
-          role,
+          role: isTeacherRole(role) ? "teacher" : "student",
         });
 
         const liveKitUrl = getResolvedLiveKitUrl(tokenResponse.url);
@@ -935,12 +977,15 @@ export function LiveClassroomRoom({
         roomRef.current.disconnect();
         roomRef.current = null;
       }
+
+      // Only reset on full unmount (classId/role change), not on user ref changes.
+      // hasInitializedRef is intentionally NOT reset here to prevent double-init.
     };
   }, [classId, role, router, user, isAuthLoading]);
 
   // Noise detection — teacher-side only, runs every 800ms
   useEffect(() => {
-    if (role !== "teacher" || connectionState !== "connected") {
+    if (!isTeacherRole(role) || connectionState !== "connected") {
       return;
     }
 
@@ -998,7 +1043,7 @@ export function LiveClassroomRoom({
   }, [showChat]);
 
   async function requestMuteParticipant(targetIdentity: string) {
-    if (!roomRef.current || role !== "teacher") {
+    if (!roomRef.current || !isTeacherRole(role)) {
       return;
     }
 
@@ -1075,7 +1120,7 @@ export function LiveClassroomRoom({
       senderName: session.name,
       text: chatInput.trim(),
       timestamp: Date.now(),
-      isTeacher: role === "teacher",
+      isTeacher: isTeacherRole(role),
     };
 
     setChatMessages((prev) => [...prev, msg]);
@@ -1094,20 +1139,43 @@ export function LiveClassroomRoom({
       return;
     }
 
-    try {
-      if (isScreenSharing) {
+    if (!supportsScreenShare) {
+      setDeviceMessage("Screen sharing is not supported on this device or browser.");
+      return;
+    }
+
+    if (isScreenSharing) {
+      try {
         await roomRef.current.localParticipant.setScreenShareEnabled(false);
         // State cleared via LocalTrackUnpublished event
-      } else {
-        await roomRef.current.localParticipant.setScreenShareEnabled(true);
-        // State set via LocalTrackPublished event
+      } catch {
+        // Best-effort stop — state will be corrected by the track event
       }
+      return;
+    }
+
+    setIsRequestingScreenShare(true);
+    setDeviceMessage("");
+
+    try {
+      await roomRef.current.localParticipant.setScreenShareEnabled(true);
+      // State set via LocalTrackPublished event
     } catch (err) {
-      if (err instanceof DOMException && err.name === "NotAllowedError") {
-        setDeviceMessage("Screen share permission was denied.");
+      if (err instanceof DOMException) {
+        if (err.name === "NotAllowedError") {
+          setDeviceMessage("Screen sharing was cancelled or permission was denied.");
+        } else if (err.name === "AbortError") {
+          setDeviceMessage("Screen sharing was cancelled.");
+        } else if (err.name === "NotSupportedError") {
+          setDeviceMessage("Screen sharing is not supported on this device.");
+        } else {
+          setDeviceMessage("Screen sharing could not be started. Please try again.");
+        }
       } else {
-        setDeviceMessage("Screen sharing is not supported in this browser.");
+        setDeviceMessage("Screen sharing is not available in this browser.");
       }
+    } finally {
+      setIsRequestingScreenShare(false);
     }
   }
 
@@ -1118,7 +1186,7 @@ export function LiveClassroomRoom({
 
     manualDisconnectRef.current = true;
 
-    if (role === "teacher" && isRecording) {
+    if (isMainTeacher && isRecording) {
       await stopRecording();
     }
 
@@ -1127,12 +1195,12 @@ export function LiveClassroomRoom({
     }
 
     try {
-      if (role === "teacher" && !isCoTeacher) {
+      if (isMainTeacher) {
         // Primary teacher: broadcast end-class to all and mark session ended
         await publishRoomEndedNotice();
         await endLiveClass(classId, session.email);
       } else {
-        // Co-teacher or student: just leave quietly
+        // Assistant teacher or student: just leave quietly
         await unregisterPresence();
       }
     } catch (requestError) {
@@ -1183,6 +1251,21 @@ export function LiveClassroomRoom({
     }
   }
 
+  // Active-speaker auto-focus — MUST be declared before any conditional return
+  // to satisfy React's Rules of Hooks (hooks cannot be called after early returns).
+  const focusedRemote = useMemo(() => {
+    if (remoteScreenShareStream || screenShareStream) {
+      return null; // screen share takes over the main tile
+    }
+    if (isTeacherRole(role)) {
+      const speaking = studentTiles.find((p) => activeSpeakerIdentities.has(p.identity));
+      return speaking ?? studentTiles[0] ?? null;
+    }
+    return teacherStreamCard ?? null;
+  }, [role, studentTiles, activeSpeakerIdentities, teacherStreamCard, remoteScreenShareStream, screenShareStream]);
+
+  const mainTileIdentity = focusedRemote?.identity;
+
   if (isLoading) {
     return (
       <main className="min-h-screen">
@@ -1209,20 +1292,6 @@ export function LiveClassroomRoom({
       </main>
     );
   }
-
-  // Active-speaker auto-focus: promote the speaking participant to the main tile
-  const focusedRemote = useMemo(() => {
-    if (remoteScreenShareStream || screenShareStream) {
-      return null; // screen share takes over the main tile
-    }
-    if (role === "teacher") {
-      const speaking = studentTiles.find((p) => activeSpeakerIdentities.has(p.identity));
-      return speaking ?? studentTiles[0] ?? null;
-    }
-    return teacherStreamCard ?? null;
-  }, [role, studentTiles, activeSpeakerIdentities, teacherStreamCard, remoteScreenShareStream, screenShareStream]);
-
-  const mainTileIdentity = focusedRemote?.identity;
 
   return (
     <>
@@ -1371,7 +1440,7 @@ export function LiveClassroomRoom({
 
       {/* ── Raised hands queue (teacher only, fixed overlay) ──────────────── */}
       <AnimatePresence>
-        {role === "teacher" && raisedHands.size > 0 ? (
+        {isTeacherRole(role) && raisedHands.size > 0 ? (
           <motion.div
             key="raised-hands"
             initial={{ opacity: 0, y: 24 }}
@@ -1562,7 +1631,7 @@ export function LiveClassroomRoom({
                 {connectionState}
               </div>
               <AnimatePresence>
-                {role === "teacher" && !isCoTeacher && isRecording ? (
+                {isMainTeacher && isRecording ? (
                   <motion.div
                     key="rec-badge"
                     initial={{ opacity: 0, scale: 0.8 }}
@@ -1575,7 +1644,7 @@ export function LiveClassroomRoom({
                   </motion.div>
                 ) : null}
               </AnimatePresence>
-              {role === "teacher" && isUploadingRecording ? (
+              {isMainTeacher && isUploadingRecording ? (
                 <div className="inline-flex rounded-full bg-blue-100 px-4 py-2 text-sm font-semibold text-blue-700">
                   Uploading Recording
                 </div>
@@ -1673,12 +1742,12 @@ export function LiveClassroomRoom({
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm text-slate-500">
-                  {role === "teacher"
+                  {isTeacherRole(role)
                     ? classroom.teacher_name
                     : `Live session with ${classroom.teacher_name}`}
                 </p>
                 <p className="mt-1 text-lg font-semibold text-slate-800">
-                  {role === "teacher" ? "LiveKit classroom active" : "Connected classroom"}
+                  {isTeacherRole(role) ? "LiveKit classroom active" : "Connected classroom"}
                 </p>
               </div>
               <div className="rounded-full bg-emerald-100 px-4 py-2 text-sm font-semibold text-emerald-700">
@@ -1708,9 +1777,9 @@ export function LiveClassroomRoom({
               ) : (
                 <VideoTile
                   stream={focusedRemote?.stream ?? null}
-                  title={focusedRemote?.name ?? (role === "teacher" ? "Waiting for students" : classroom.teacher_name)}
+                  title={focusedRemote?.name ?? (isTeacherRole(role) ? "Waiting for students" : classroom.teacher_name)}
                   subtitle={
-                    role === "teacher"
+                    isTeacherRole(role)
                       ? focusedRemote
                         ? activeSpeakerIdentities.has(focusedRemote.identity)
                           ? "Speaking now"
@@ -1836,29 +1905,42 @@ export function LiveClassroomRoom({
               ) : null}
 
               {/* Screen Share (teachers only) */}
-              {role === "teacher" ? (
+              {isTeacherRole(role) ? (
                 <motion.button
                   type="button"
                   whileTap={{ scale: 0.88 }}
                   whileHover={{ scale: 1.05 }}
                   transition={{ type: "spring", stiffness: 400, damping: 20 }}
                   onClick={() => void toggleScreenShare()}
-                  title={isScreenSharing ? "Stop sharing" : "Share screen"}
-                  className={`flex flex-col items-center gap-1 rounded-xl px-3 py-2 transition-colors ${
+                  disabled={isRequestingScreenShare || !supportsScreenShare}
+                  title={
+                    !supportsScreenShare
+                      ? "Screen sharing is not supported on this device"
+                      : isRequestingScreenShare
+                        ? "Requesting screen share..."
+                        : isScreenSharing
+                          ? "Stop sharing screen"
+                          : "Share your screen"
+                  }
+                  className={`flex flex-col items-center gap-1 rounded-xl px-3 py-2 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                     isScreenSharing
                       ? "bg-sky-100 text-sky-700"
-                      : "text-slate-700 hover:bg-slate-50"
+                      : isRequestingScreenShare
+                        ? "bg-slate-100 text-slate-400"
+                        : !supportsScreenShare
+                          ? "text-slate-400"
+                          : "text-slate-700 hover:bg-slate-50"
                   }`}
                 >
                   <MonitorIcon className="h-5 w-5" />
                   <span className="text-[10px] font-medium leading-none">
-                    {isScreenSharing ? "Stop Share" : "Share"}
+                    {isRequestingScreenShare ? "Starting..." : isScreenSharing ? "Stop Share" : "Share"}
                   </span>
                 </motion.button>
               ) : null}
 
-              {/* Record (primary teacher only — not co-teacher) */}
-              {role === "teacher" && !isCoTeacher ? (
+              {/* Record (primary teacher only — not assistant or co-teacher) */}
+              {isMainTeacher ? (
                 <motion.button
                   type="button"
                   whileTap={{ scale: 0.88 }}
@@ -1899,19 +1981,19 @@ export function LiveClassroomRoom({
                 whileHover={{ scale: 1.05, boxShadow: "0 4px 16px rgba(239,68,68,0.35)" }}
                 transition={{ type: "spring", stiffness: 400, damping: 20 }}
                 onClick={handleLeaveOrEndClass}
-                title={role === "teacher" ? "End class for everyone" : "Leave class"}
+                title={isMainTeacher ? "End class for everyone" : "Leave class"}
                 className="flex flex-col items-center gap-1 rounded-xl bg-red-500 px-3 py-2 text-white shadow-sm transition-colors"
               >
                 <PhoneOffIcon className="h-5 w-5" />
                 <span className="text-[10px] font-medium leading-none">
-                  {role === "teacher" && !isCoTeacher ? "End Class" : "Leave"}
+                  {isMainTeacher ? "End Class" : "Leave"}
                 </span>
               </motion.button>
             </div>
 
             {/* Recording status */}
             <AnimatePresence>
-              {role === "teacher" && recordingError ? (
+              {isTeacherRole(role) && recordingError ? (
                 <motion.div
                   key="rec-error"
                   initial={{ opacity: 0, y: 6 }}
@@ -1922,7 +2004,7 @@ export function LiveClassroomRoom({
                   {recordingError}
                 </motion.div>
               ) : null}
-              {role === "teacher" && recordingSuccess ? (
+              {isTeacherRole(role) && recordingSuccess ? (
                 <motion.div
                   key="rec-success"
                   initial={{ opacity: 0, y: 6 }}
@@ -1937,7 +2019,7 @@ export function LiveClassroomRoom({
 
             {remoteParticipants.length === 0 ? (
               <div className="mt-4 rounded-[1.25rem] border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-600">
-                {role === "teacher"
+                {isTeacherRole(role)
                   ? "No students are visible yet. Keep the room open and they will appear automatically."
                   : "Waiting for the teacher or classmates to appear in the room."}
               </div>
@@ -1956,10 +2038,10 @@ export function LiveClassroomRoom({
               className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft"
             >
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-600">
-                {role === "teacher" ? "Participants" : "Self View"}
+                {isTeacherRole(role) ? "Participants" : "Self View"}
               </p>
 
-              {role === "teacher" ? (
+              {isTeacherRole(role) ? (
                 <motion.div
                   variants={staggerContainer}
                   initial="hidden"
@@ -2088,7 +2170,7 @@ export function LiveClassroomRoom({
               className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft"
             >
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-sky-600">
-                {role === "teacher" ? "Student Tiles" : "Classroom Tiles"}
+                {isTeacherRole(role) ? "Student Tiles" : "Classroom Tiles"}
               </p>
               <div className="mt-5 grid gap-4">
                 {localParticipantCard ? (
@@ -2101,7 +2183,7 @@ export function LiveClassroomRoom({
                     className="min-h-[160px] sm:min-h-[180px]"
                   />
                 ) : null}
-                {(role === "teacher" ? studentTiles : remoteParticipants).map((participant) => (
+                {(isTeacherRole(role) ? studentTiles : remoteParticipants).map((participant) => (
                   <VideoTile
                     key={participant.identity}
                     stream={participant.stream}
