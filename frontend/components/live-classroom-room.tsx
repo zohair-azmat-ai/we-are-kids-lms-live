@@ -230,13 +230,19 @@ export function LiveClassroomRoom({
   const [unreadChat, setUnreadChat] = useState(0);
   // Screen share
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [isRequestingScreenShare, setIsRequestingScreenShare] = useState(false);
   const [screenShareStream, setScreenShareStream] = useState<MediaStream | null>(null);
   const [remoteScreenShareStream, setRemoteScreenShareStream] = useState<MediaStream | null>(null);
+  // Whether the browser/device supports screen sharing
+  const supportsScreenShare = typeof navigator !== "undefined" && "mediaDevices" in navigator && typeof (navigator.mediaDevices as MediaDevices & { getDisplayMedia?: unknown }).getDisplayMedia === "function";
   // Smart moderation
   const [noisyParticipants, setNoisyParticipants] = useState<Set<string>>(new Set()); // identity
   const [mutedByTeacher, setMutedByTeacher] = useState<Set<string>>(new Set()); // identity
 
   const roomRef = useRef<Room | null>(null);
+  // Prevents double-initialization when the auth user object gets a new reference
+  // (same data, different identity) during a React re-render cycle.
+  const hasInitializedRef = useRef(false);
   const classroomRef = useRef<LiveClassSession | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<number | null>(null);
@@ -628,20 +634,28 @@ export function LiveClassroomRoom({
 
   useEffect(() => {
     async function initializeRoom() {
+      // Defer until auth has settled — avoids acting on a stale null user.
       if (isAuthLoading) {
+        console.log("[Classroom] Auth still loading, waiting...");
         return;
       }
 
-      // Guard: classId must be a non-empty string — reject anything that got
-      // stringified from a function reference or other invalid value.
+      // Prevent double-initialization when the auth user object is recreated
+      // with the same data (new reference) on re-render.
+      if (hasInitializedRef.current) {
+        return;
+      }
+
+      // Guard: classId must be a non-empty string.
       if (!classId || typeof classId !== "string" || classId.trim().length === 0) {
-        console.error("[LiveClassroomRoom] Invalid classId received:", classId);
+        console.error("[Classroom] Invalid classId:", classId);
         setError("Invalid classroom session. Please return to your dashboard and start a new class.");
         setIsLoading(false);
         return;
       }
 
       if (!user) {
+        console.log("[Classroom] No user after auth settled — redirecting to login");
         router.replace("/login");
         return;
       }
@@ -653,9 +667,12 @@ export function LiveClassroomRoom({
         : user.role === role;
 
       if (!userRoleValid) {
+        console.log("[Classroom] Role mismatch — user.role:", user.role, "required:", role, "— redirecting");
         router.replace("/login");
         return;
       }
+
+      hasInitializedRef.current = true;
 
       setSession(user);
 
@@ -960,6 +977,9 @@ export function LiveClassroomRoom({
         roomRef.current.disconnect();
         roomRef.current = null;
       }
+
+      // Only reset on full unmount (classId/role change), not on user ref changes.
+      // hasInitializedRef is intentionally NOT reset here to prevent double-init.
     };
   }, [classId, role, router, user, isAuthLoading]);
 
@@ -1119,20 +1139,43 @@ export function LiveClassroomRoom({
       return;
     }
 
-    try {
-      if (isScreenSharing) {
+    if (!supportsScreenShare) {
+      setDeviceMessage("Screen sharing is not supported on this device or browser.");
+      return;
+    }
+
+    if (isScreenSharing) {
+      try {
         await roomRef.current.localParticipant.setScreenShareEnabled(false);
         // State cleared via LocalTrackUnpublished event
-      } else {
-        await roomRef.current.localParticipant.setScreenShareEnabled(true);
-        // State set via LocalTrackPublished event
+      } catch {
+        // Best-effort stop — state will be corrected by the track event
       }
+      return;
+    }
+
+    setIsRequestingScreenShare(true);
+    setDeviceMessage("");
+
+    try {
+      await roomRef.current.localParticipant.setScreenShareEnabled(true);
+      // State set via LocalTrackPublished event
     } catch (err) {
-      if (err instanceof DOMException && err.name === "NotAllowedError") {
-        setDeviceMessage("Screen share permission was denied.");
+      if (err instanceof DOMException) {
+        if (err.name === "NotAllowedError") {
+          setDeviceMessage("Screen sharing was cancelled or permission was denied.");
+        } else if (err.name === "AbortError") {
+          setDeviceMessage("Screen sharing was cancelled.");
+        } else if (err.name === "NotSupportedError") {
+          setDeviceMessage("Screen sharing is not supported on this device.");
+        } else {
+          setDeviceMessage("Screen sharing could not be started. Please try again.");
+        }
       } else {
-        setDeviceMessage("Screen sharing is not supported in this browser.");
+        setDeviceMessage("Screen sharing is not available in this browser.");
       }
+    } finally {
+      setIsRequestingScreenShare(false);
     }
   }
 
@@ -1869,16 +1912,29 @@ export function LiveClassroomRoom({
                   whileHover={{ scale: 1.05 }}
                   transition={{ type: "spring", stiffness: 400, damping: 20 }}
                   onClick={() => void toggleScreenShare()}
-                  title={isScreenSharing ? "Stop sharing" : "Share screen"}
-                  className={`flex flex-col items-center gap-1 rounded-xl px-3 py-2 transition-colors ${
+                  disabled={isRequestingScreenShare || !supportsScreenShare}
+                  title={
+                    !supportsScreenShare
+                      ? "Screen sharing is not supported on this device"
+                      : isRequestingScreenShare
+                        ? "Requesting screen share..."
+                        : isScreenSharing
+                          ? "Stop sharing screen"
+                          : "Share your screen"
+                  }
+                  className={`flex flex-col items-center gap-1 rounded-xl px-3 py-2 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                     isScreenSharing
                       ? "bg-sky-100 text-sky-700"
-                      : "text-slate-700 hover:bg-slate-50"
+                      : isRequestingScreenShare
+                        ? "bg-slate-100 text-slate-400"
+                        : !supportsScreenShare
+                          ? "text-slate-400"
+                          : "text-slate-700 hover:bg-slate-50"
                   }`}
                 >
                   <MonitorIcon className="h-5 w-5" />
                   <span className="text-[10px] font-medium leading-none">
-                    {isScreenSharing ? "Stop Share" : "Share"}
+                    {isRequestingScreenShare ? "Starting..." : isScreenSharing ? "Stop Share" : "Share"}
                   </span>
                 </motion.button>
               ) : null}

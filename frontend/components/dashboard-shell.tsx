@@ -33,10 +33,12 @@ export function DashboardShell({
 
   useEffect(() => {
     if (isLoading) {
+      console.log("[Dashboard] Auth loading — waiting for session...");
       return;
     }
 
     if (!user) {
+      console.log("[Dashboard] No user after auth settled — redirecting to login");
       router.replace("/login");
       return;
     }
@@ -47,8 +49,11 @@ export function DashboardShell({
         ? isTeacherRole(user.role)
         : user.role === allowedRole;
 
+    console.log("[Dashboard] Auth resolved — user.role:", user.role, "allowedRole:", allowedRole, "match:", roleMatches);
+
     if (!roleMatches) {
       const redirect = isTeacherRole(user.role) ? "/teacher/dashboard" : `/${user.role}/dashboard`;
+      console.log("[Dashboard] Role mismatch — redirecting to:", redirect);
       router.replace(redirect);
     }
   }, [allowedRole, isLoading, router, user]);
