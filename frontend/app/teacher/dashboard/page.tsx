@@ -20,6 +20,20 @@ import {
 } from "@/lib/api";
 import { getRecordingStatus } from "@/lib/recordings";
 
+/** Rejects functions, objects, empty strings, and any value that isn't a real
+ *  non-empty class-id string. The `"anonymous"` guard catches the specific
+ *  "%3Canonymous%20code%3E" pollution seen when a function ref leaks into a
+ *  template literal in some bundler environments. */
+function isValidClassId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    !value.includes("anonymous") &&
+    !value.startsWith("[object") &&
+    !value.startsWith("function")
+  );
+}
+
 export default function TeacherDashboardPage() {
   const router = useRouter();
   const { user } = useAuth();
@@ -91,14 +105,15 @@ export default function TeacherDashboardPage() {
       setError("");
 
       const classroom = await startLiveClass(user.email);
+      console.log("[Dashboard] startLiveClass response:", classroom);
 
-      if (!classroom.class_id || typeof classroom.class_id !== "string") {
+      if (!isValidClassId(classroom.class_id)) {
         throw new Error(
           `Server returned an invalid classroom ID: ${String(classroom.class_id)}`,
         );
       }
 
-      console.log("[Dashboard] Starting live class, navigating to:", classroom.class_id);
+      console.log("[Dashboard] Navigating to classroom:", classroom.class_id);
       router.push(`/teacher/classroom/${classroom.class_id}`);
     } catch (requestError) {
       setError(
@@ -197,7 +212,14 @@ export default function TeacherDashboardPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => router.push(`/teacher/classroom/${session.class_id}`)}
+                    onClick={() => {
+                      console.log("[Dashboard] Live Now join — session:", session);
+                      if (!isValidClassId(session.class_id)) {
+                        console.error("[Dashboard] Invalid class_id on live session:", session.class_id);
+                        return;
+                      }
+                      router.push(`/teacher/classroom/${session.class_id}`);
+                    }}
                     className="inline-flex w-full items-center justify-center rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-600 sm:w-auto"
                   >
                     {isOwnSession ? "Rejoin Class" : "Join as Co-Teacher"}

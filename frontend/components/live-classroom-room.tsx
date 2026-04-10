@@ -1183,6 +1183,21 @@ export function LiveClassroomRoom({
     }
   }
 
+  // Active-speaker auto-focus — MUST be declared before any conditional return
+  // to satisfy React's Rules of Hooks (hooks cannot be called after early returns).
+  const focusedRemote = useMemo(() => {
+    if (remoteScreenShareStream || screenShareStream) {
+      return null; // screen share takes over the main tile
+    }
+    if (role === "teacher") {
+      const speaking = studentTiles.find((p) => activeSpeakerIdentities.has(p.identity));
+      return speaking ?? studentTiles[0] ?? null;
+    }
+    return teacherStreamCard ?? null;
+  }, [role, studentTiles, activeSpeakerIdentities, teacherStreamCard, remoteScreenShareStream, screenShareStream]);
+
+  const mainTileIdentity = focusedRemote?.identity;
+
   if (isLoading) {
     return (
       <main className="min-h-screen">
@@ -1209,20 +1224,6 @@ export function LiveClassroomRoom({
       </main>
     );
   }
-
-  // Active-speaker auto-focus: promote the speaking participant to the main tile
-  const focusedRemote = useMemo(() => {
-    if (remoteScreenShareStream || screenShareStream) {
-      return null; // screen share takes over the main tile
-    }
-    if (role === "teacher") {
-      const speaking = studentTiles.find((p) => activeSpeakerIdentities.has(p.identity));
-      return speaking ?? studentTiles[0] ?? null;
-    }
-    return teacherStreamCard ?? null;
-  }, [role, studentTiles, activeSpeakerIdentities, teacherStreamCard, remoteScreenShareStream, screenShareStream]);
-
-  const mainTileIdentity = focusedRemote?.identity;
 
   return (
     <>
