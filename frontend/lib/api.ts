@@ -324,6 +324,17 @@ export type SessionSummaryResponse = {
   started_at: string | null;
 };
 
+/** Error thrown for non-2xx API responses. Includes the HTTP status code. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function parseResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
   if (!response.ok) {
     if (response.status === 401) {
@@ -333,7 +344,7 @@ async function parseResponse<T>(response: Response, fallbackMessage: string): Pr
     const errorPayload = (await response.json().catch(() => null)) as
       | { detail?: string }
       | null;
-    throw new Error(errorPayload?.detail ?? fallbackMessage);
+    throw new ApiError(errorPayload?.detail ?? fallbackMessage, response.status);
   }
 
   return (await response.json()) as T;

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import {
   fetchSessionSummary,
   generateSessionSummary,
+  ApiError,
   type SessionSummaryResponse,
 } from "@/lib/api";
 
@@ -48,12 +49,10 @@ export function SessionSummaryCard({ sessionId, autoFetch = true }: Props) {
         const data = await fetchSessionSummary(sessionId);
         setSummary(data);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "";
-
-        if (msg.toLowerCase().includes("404") || msg.toLowerCase().includes("no summary")) {
+        if (err instanceof ApiError && err.status === 404) {
           setNotFound(true);
         } else {
-          setError(msg || "Unable to load summary.");
+          setError(err instanceof Error ? err.message : "Unable to load summary.");
         }
       } finally {
         setIsLoading(false);
