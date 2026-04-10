@@ -7,6 +7,7 @@ import { DashboardShell } from "@/components/dashboard-shell";
 import { useAuth } from "@/components/auth-provider";
 import { LoadingPanel } from "@/components/ui-state";
 import { usePageTitle } from "@/hooks/use-page-title";
+import { getAccessToken } from "@/lib/demo-auth";
 import {
   fetchRecording,
   fetchRecordingIntelligence,
@@ -40,7 +41,7 @@ export function RecordingPlayback({
   subtitle,
 }: RecordingPlaybackProps) {
   const params = useParams<{ recordingId: string }>();
-  const { user } = useAuth();
+  const { user, isLoading: isAuthLoading } = useAuth();
   const [recording, setRecording] = useState<RecordingItem | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -53,19 +54,41 @@ export function RecordingPlayback({
   usePageTitle(recording ? recording.title : title);
 
   useEffect(() => {
+    // Wait for auth to settle before making any authenticated request.
+    // Firing before auth is ready means no token → 401 → clearSession() wipes the token.
+    if (isAuthLoading || !user) return;
+
     async function loadRecording() {
+      const token = getAccessToken();
+      console.log(
+        "[RecordingPlayback] Loading recording:",
+        params.recordingId,
+        "token present:",
+        Boolean(token),
+        "role:",
+        user?.role,
+      );
+
+      if (!token) {
+        setError("Your session has expired. Please sign in again.");
+        setIsLoading(false);
+        return;
+      }
+
       try {
         setIsLoading(true);
         const recordingItem = await fetchRecording(params.recordingId);
 
         if (allowedRole === "teacher") {
-          if (!user || !["teacher", "main_teacher", "assistant_teacher"].includes(user.role)) {
+          const role = user?.role;
+
+          if (!role || !["teacher", "main_teacher", "assistant_teacher"].includes(role)) {
             setError("Unable to verify teacher access for this recording.");
             setRecording(null);
             return;
           }
 
-          if (recordingItem.teacher !== user.name) {
+          if (recordingItem.teacher !== user?.name) {
             setError("You can only watch your own recordings.");
             setRecording(null);
             return;
@@ -85,7 +108,7 @@ export function RecordingPlayback({
     }
 
     void loadRecording();
-  }, [params.recordingId, allowedRole, user]);
+  }, [params.recordingId, allowedRole, user, isAuthLoading]);
 
   // Load and poll intelligence until completed/failed
   const loadIntelligence = useCallback(async (recordingId: string) => {
