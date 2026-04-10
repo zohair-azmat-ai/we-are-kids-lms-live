@@ -135,9 +135,15 @@ export function RecordingsManagement({
   }, [loadRecordings]);
 
   const teacherScopedRecordings = useMemo(() => {
+    // Backend already scopes GET /api/v1/recordings to the authenticated teacher's own
+    // recordings, so no client-side name filter is needed. We only apply the filter
+    // when an explicit teacherName is provided AND it actually matches at least one
+    // recording — this avoids blanking the list before auth resolves.
     if (role !== "teacher") return recordings;
-    if (!teacherName) return [];
-    return recordings.filter((r) => r.teacher === teacherName);
+    if (!teacherName) return recordings;
+    const nameFiltered = recordings.filter((r) => r.teacher === teacherName);
+    // Fall back to showing all if the name filter would empty the list (e.g. name mismatch)
+    return nameFiltered.length > 0 ? nameFiltered : recordings;
   }, [recordings, role, teacherName]);
 
   const filteredRecordings = useMemo(() => {

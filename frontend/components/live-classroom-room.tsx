@@ -131,6 +131,8 @@ type ParticipantCard = {
   stream: MediaStream | null;
   isLocal: boolean;
   isTeacher: boolean;
+  /** Actual role from LiveKit participant metadata, e.g. "main_teacher", "assistant_teacher", "student" */
+  participantRole: string;
   micEnabled: boolean;
   cameraEnabled: boolean;
 };
@@ -192,6 +194,18 @@ function hasPublishedTrack(participant: Participant, kind: Track.Kind): boolean 
   }
 
   return false;
+}
+
+function parseParticipantRole(participant: Participant): string {
+  try {
+    if (participant.metadata) {
+      const meta = JSON.parse(participant.metadata) as Record<string, unknown>;
+      if (typeof meta.role === "string") return meta.role;
+    }
+  } catch {
+    // ignore malformed metadata
+  }
+  return "student";
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────
@@ -308,6 +322,7 @@ export function LiveClassroomRoom({
       stream: localStream,
       isLocal: true,
       isTeacher: isTeacherRole(role),
+      participantRole: session.role,
       micEnabled,
       cameraEnabled,
     };
@@ -323,16 +338,18 @@ export function LiveClassroomRoom({
   }, [classroom?.participants_count, localParticipantCard, remoteParticipants.length]);
 
   const teacherStreamCard = useMemo(() => {
+    // Primary classroom teacher by email match
     return remoteParticipants.find(
       (participant) => participant.identity === classroom?.teacher_email,
     );
   }, [classroom?.teacher_email, remoteParticipants]);
 
   const studentTiles = useMemo(() => {
+    // Exclude all teacher-role participants (main + assistants), not just the primary teacher
     return remoteParticipants.filter(
-      (participant) => participant.identity !== classroom?.teacher_email,
+      (participant) => !participant.isTeacher,
     );
-  }, [classroom?.teacher_email, remoteParticipants]);
+  }, [remoteParticipants]);
 
   const allParticipantsForPanel = useMemo(() => {
     return localParticipantCard
@@ -348,15 +365,24 @@ export function LiveClassroomRoom({
     setCameraEnabled(hasPublishedTrack(room.localParticipant, Track.Kind.Video));
 
     const nextParticipants = Array.from(room.remoteParticipants.values()).map(
-      (participant: Participant) => ({
-        identity: participant.identity,
-        name: participant.name || participant.identity,
-        stream: createStreamFromParticipant(participant),
-        isLocal: false,
-        isTeacher: participant.identity === currentClassroom?.teacher_email,
-        micEnabled: hasPublishedTrack(participant, Track.Kind.Audio),
-        cameraEnabled: hasPublishedTrack(participant, Track.Kind.Video),
-      }),
+      (participant: Participant) => {
+        const participantRole = parseParticipantRole(participant);
+        const isTeacherParticipant =
+          participant.identity === currentClassroom?.teacher_email ||
+          participantRole === "teacher" ||
+          participantRole === "main_teacher" ||
+          participantRole === "assistant_teacher";
+        return {
+          identity: participant.identity,
+          name: participant.name || participant.identity,
+          stream: createStreamFromParticipant(participant),
+          isLocal: false,
+          isTeacher: isTeacherParticipant,
+          participantRole,
+          micEnabled: hasPublishedTrack(participant, Track.Kind.Audio),
+          cameraEnabled: hasPublishedTrack(participant, Track.Kind.Video),
+        };
+      },
     );
 
     setParticipants(nextParticipants);
@@ -741,6 +767,9 @@ export function LiveClassroomRoom({
             syncRoomState(room, classroomRef.current);
           })
           .on(RoomEvent.ParticipantDisconnected, () => {
+            syncRoomState(room, classroomRef.current);
+          })
+          .on(RoomEvent.ParticipantMetadataChanged, () => {
             syncRoomState(room, classroomRef.current);
           })
           .on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
@@ -1257,12 +1286,18 @@ export function LiveClassroomRoom({
     if (remoteScreenShareStream || screenShareStream) {
       return null; // screen share takes over the main tile
     }
-    if (isTeacherRole(role)) {
+    // Main teacher: show active-speaking student (or first student)
+    if (isMainTeacher) {
       const speaking = studentTiles.find((p) => activeSpeakerIdentities.has(p.identity));
       return speaking ?? studentTiles[0] ?? null;
     }
+    // Co-teacher / assistant teacher: feature the primary teacher's stream in the main tile
+    if (isCoTeacher) {
+      return teacherStreamCard ?? studentTiles[0] ?? null;
+    }
+    // Student: show main teacher
     return teacherStreamCard ?? null;
-  }, [role, studentTiles, activeSpeakerIdentities, teacherStreamCard, remoteScreenShareStream, screenShareStream]);
+  }, [isMainTeacher, isCoTeacher, studentTiles, activeSpeakerIdentities, teacherStreamCard, remoteScreenShareStream, screenShareStream]);
 
   const mainTileIdentity = focusedRemote?.identity;
 
@@ -1413,9 +1448,13 @@ export function LiveClassroomRoom({
                                   ? "Speaking..."
                                   : hasHand
                                     ? "Hand raised"
-                                    : participant.isTeacher
-                                      ? "Teacher"
-                                      : "Student"}
+                                    : participant.participantRole === "main_teacher"
+                                      ? "Main Teacher"
+                                      : participant.participantRole === "assistant_teacher"
+                                        ? "Assistant Teacher"
+                                        : participant.isTeacher
+                                          ? "Teacher"
+                                          : "Student"}
                               </p>
                             </div>
                           </div>
@@ -1777,15 +1816,26 @@ export function LiveClassroomRoom({
               ) : (
                 <VideoTile
                   stream={focusedRemote?.stream ?? null}
-                  title={focusedRemote?.name ?? (isTeacherRole(role) ? "Waiting for students" : classroom.teacher_name)}
+                  title={
+                    focusedRemote?.name ??
+                    (isMainTeacher ? "Waiting for students" : classroom.teacher_name)
+                  }
                   subtitle={
-                    isTeacherRole(role)
+                    isMainTeacher
                       ? focusedRemote
                         ? activeSpeakerIdentities.has(focusedRemote.identity)
                           ? "Speaking now"
                           : "Student video"
                         : "No students yet"
-                      : "Teacher live stream"
+                      : isCoTeacher
+                        ? focusedRemote
+                          ? focusedRemote.identity === classroom.teacher_email
+                            ? "Main Teacher"
+                            : activeSpeakerIdentities.has(focusedRemote.identity)
+                              ? "Speaking now"
+                              : "Teacher video"
+                          : "Waiting for teacher"
+                        : "Teacher live stream"
                   }
                   priority
                   isSpeaking={mainTileIdentity ? activeSpeakerIdentities.has(mainTileIdentity) : false}
@@ -2071,6 +2121,33 @@ export function LiveClassroomRoom({
                       </div>
                     </motion.div>
                   ) : null}
+                  {/* Show main teacher in list for co-teacher/assistant view */}
+                  {isCoTeacher && teacherStreamCard ? (
+                    <motion.div
+                      variants={fadeUp}
+                      className="flex items-center justify-between rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        {activeSpeakerIdentities.has(teacherStreamCard.identity) ? (
+                          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-green-500" />
+                        ) : (
+                          <span className="h-2 w-2 shrink-0 rounded-full bg-blue-400" />
+                        )}
+                        <span className="truncate text-sm font-medium text-slate-800">{teacherStreamCard.name}</span>
+                        <span className="shrink-0 rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">
+                          Main Teacher
+                        </span>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5 pl-2">
+                        {teacherStreamCard.micEnabled
+                          ? <MicIcon className="h-4 w-4 text-emerald-500" />
+                          : <MicOffIcon className="h-4 w-4 text-red-400" />}
+                        {teacherStreamCard.cameraEnabled
+                          ? <VideoOnIcon className="h-4 w-4 text-emerald-500" />
+                          : <VideoOffIcon className="h-4 w-4 text-slate-400" />}
+                      </div>
+                    </motion.div>
+                  ) : null}
                   {studentTiles.length ? (
                     studentTiles.map((participant) => {
                       const hasHandRaised = raisedHands.has(participant.identity);
@@ -2188,7 +2265,15 @@ export function LiveClassroomRoom({
                     key={participant.identity}
                     stream={participant.stream}
                     title={participant.name}
-                    subtitle={participant.isTeacher ? "Teacher" : "Student"}
+                    subtitle={
+                      participant.participantRole === "main_teacher"
+                        ? "Main Teacher"
+                        : participant.participantRole === "assistant_teacher"
+                          ? "Assistant Teacher"
+                          : participant.isTeacher
+                            ? "Teacher"
+                            : "Student"
+                    }
                     isSpeaking={activeSpeakerIdentities.has(participant.identity)}
                     className="min-h-[160px] sm:min-h-[180px]"
                   />
