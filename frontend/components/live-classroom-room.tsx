@@ -3,14 +3,14 @@
 /**
  * LiveClassroomRoom — Jitsi Meet integration
  *
- * Replaces the previous LiveKit-based implementation with a Jitsi Meet
- * embed using the Jitsi External API.  All LMS-side features (session
- * lifecycle, attendance presence, role controls, recording metadata) are
- * preserved; the video/audio call is delegated entirely to Jitsi for
- * stable group calling.
- *
- * Room naming: wearekids<classId-alphanum>  (e.g. wearekidsabc123)
- * Domain:      NEXT_PUBLIC_JITSI_DOMAIN (default: meet.jit.si)
+ * Fixes for mobile (Safari + Chrome):
+ *  - loadJitsiScript: poll for window.JitsiMeetExternalAPI when the
+ *    script tag already exists (avoids "load" event miss on re-mount)
+ *  - 10-second join timeout: if videoConferenceJoined never fires,
+ *    show "Unable to join" error with a Retry button
+ *  - Minimal configOverwrite: removes deprecated interfaceConfigOverwrite
+ *    and complex keys that break mobile init
+ *  - Debug logs throughout initialization flow
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -37,7 +37,6 @@ interface JitsiMeetOptions {
   parentNode: HTMLElement;
   userInfo?: { displayName: string; email?: string };
   configOverwrite?: Record<string, unknown>;
-  interfaceConfigOverwrite?: Record<string, unknown>;
 }
 
 interface JitsiMeetAPI {
@@ -52,43 +51,79 @@ declare global {
   }
 }
 
-// ─── Component ───────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 type Props = {
   classId: string;
-  /** "teacher" for the teacher classroom page, "student" for the student page */
   role: "teacher" | "student";
 };
 
 const JITSI_DOMAIN = (process.env.NEXT_PUBLIC_JITSI_DOMAIN ?? "meet.jit.si").trim();
 
-/** Produces a stable, URL-safe Jitsi room name from the LMS class ID. */
 function jitsiRoomName(classId: string): string {
   return `wearekids${classId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()}`;
 }
 
-/** Dynamically loads the Jitsi External API script (idempotent). */
+/**
+ * Loads the Jitsi External API script with a polling fallback.
+ *
+ * The bug this fixes: if the <script> tag already exists in the DOM
+ * (React Strict Mode double-invoke, hot-reload) but hasn't finished
+ * loading yet, the "load" event has already fired and a new listener
+ * will never resolve. We poll window.JitsiMeetExternalAPI instead.
+ */
 function loadJitsiScript(domain: string): Promise<void> {
   return new Promise((resolve, reject) => {
+    // Already loaded — fast path
     if (typeof window !== "undefined" && window.JitsiMeetExternalAPI) {
+      console.log("[Jitsi] Script already loaded (fast path)");
       resolve();
       return;
     }
-    const existing = document.getElementById("jitsi-external-api");
+
+    const scriptId = "jitsi-external-api";
+
+    function startPolling() {
+      console.log("[Jitsi] Polling for window.JitsiMeetExternalAPI…");
+      let elapsed = 0;
+      const interval = setInterval(() => {
+        elapsed += 150;
+        if (window.JitsiMeetExternalAPI) {
+          clearInterval(interval);
+          console.log("[Jitsi] Script loaded (polled)");
+          resolve();
+        } else if (elapsed >= 12_000) {
+          clearInterval(interval);
+          reject(new Error("Jitsi script did not load in time. Please check your connection."));
+        }
+      }, 150);
+    }
+
+    const existing = document.getElementById(scriptId);
     if (existing) {
-      existing.addEventListener("load", () => resolve(), { once: true });
+      // Script tag is in the DOM — may or may not have loaded yet.
+      // Poll instead of relying on a "load" event that may have already fired.
+      startPolling();
       return;
     }
+
+    // Inject the script tag for the first time
     const script = document.createElement("script");
-    script.id = "jitsi-external-api";
+    script.id = scriptId;
     script.src = `https://${domain}/external_api.js`;
     script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () =>
+    script.onload = () => {
+      console.log("[Jitsi] Script loaded (onload)");
+      resolve();
+    };
+    script.onerror = () => {
       reject(new Error("Failed to load video call. Please check your connection."));
+    };
     document.head.appendChild(script);
   });
 }
+
+// ─── Component ───────────────────────────────────────────────────────────────
 
 export function LiveClassroomRoom({ classId, role }: Props) {
   const router = useRouter();
@@ -97,7 +132,9 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   const [session, setSession] = useState<LiveClassSession | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [canRetry, setCanRetry] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
 
   const jitsiContainerRef = useRef<HTMLDivElement>(null);
   const jitsiApiRef = useRef<JitsiMeetAPI | null>(null);
@@ -105,8 +142,8 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   const recordingIdRef = useRef<string | null>(null);
   const presenceJoinedRef = useRef(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const joinTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Derive roles from auth (user.role is the authoritative source)
   const isTeacher = user ? isTeacherRole(user.role) : role === "teacher";
   const isMainTeacher = user ? isMainTeacherRole(user.role) : false;
   const dashboardPath = isTeacher ? "/teacher/dashboard" : "/student/dashboard";
@@ -114,6 +151,10 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   // ── Cleanup ────────────────────────────────────────────────────────────────
 
   const cleanup = useCallback(async () => {
+    if (joinTimeoutRef.current) {
+      clearTimeout(joinTimeoutRef.current);
+      joinTimeoutRef.current = null;
+    }
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
@@ -122,7 +163,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
       try {
         jitsiApiRef.current.dispose();
       } catch {
-        /* ignore dispose errors */
+        /* ignore */
       }
       jitsiApiRef.current = null;
     }
@@ -141,6 +182,25 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     }
   }, [classId, user, isTeacher]);
 
+  // ── Retry ─────────────────────────────────────────────────────────────────
+
+  function handleRetry() {
+    console.log("[LiveClassroomRoom] Retry requested");
+    if (jitsiApiRef.current) {
+      try { jitsiApiRef.current.dispose(); } catch { /* ignore */ }
+      jitsiApiRef.current = null;
+    }
+    if (joinTimeoutRef.current) {
+      clearTimeout(joinTimeoutRef.current);
+      joinTimeoutRef.current = null;
+    }
+    hasInitializedRef.current = false;
+    setError("");
+    setCanRetry(false);
+    setIsLoading(true);
+    setRetryKey((k) => k + 1);
+  }
+
   // ── Initialization ─────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -148,16 +208,17 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     if (hasInitializedRef.current) return;
     hasInitializedRef.current = true;
 
-    // Capture user as a local const so TypeScript can narrow it inside
-    // the inner async function (closures don't inherit the outer narrowing).
     const currentUser = user;
     let cancelled = false;
 
     async function initialize() {
-      // Fetch the LMS class session
+      console.log("[LiveClassroomRoom] Initializing classId:", classId);
+
+      // Step 1 — Fetch LMS session
       let classSession: LiveClassSession;
       try {
         classSession = await fetchClassSession(classId);
+        console.log("[LiveClassroomRoom] Session status:", classSession.status);
       } catch {
         if (!cancelled) {
           setError("Unable to load classroom. Please return to your dashboard.");
@@ -192,12 +253,14 @@ export function LiveClassroomRoom({ classId, role }: Props) {
 
       if (cancelled) return;
 
-      // Load the Jitsi External API script
+      // Step 2 — Load Jitsi External API script
+      console.log("[LiveClassroomRoom] Loading Jitsi script from:", JITSI_DOMAIN);
       try {
         await loadJitsiScript(JITSI_DOMAIN);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "Video call failed to load.");
+          setCanRetry(true);
           setIsLoading(false);
         }
         return;
@@ -208,12 +271,13 @@ export function LiveClassroomRoom({ classId, role }: Props) {
       if (!window.JitsiMeetExternalAPI) {
         if (!cancelled) {
           setError("Video calling is unavailable. Please refresh and try again.");
+          setCanRetry(true);
           setIsLoading(false);
         }
         return;
       }
 
-      // Poll session every 15 s — redirect when the class ends
+      // Poll session every 15 s — redirect when class ends
       pollRef.current = setInterval(async () => {
         try {
           const updated = await fetchClassSession(classId);
@@ -222,21 +286,12 @@ export function LiveClassroomRoom({ classId, role }: Props) {
             router.push(dashboardPath);
           }
         } catch {
-          /* ignore poll errors */
+          /* ignore */
         }
       }, 15_000);
 
-      // Build Jitsi toolbar based on role
-      const toolbarButtons = [
-        "microphone",
-        "camera",
-        "chat",
-        "desktop",
-        "fullscreen",
-        "tileview",
-        "hangup",
-        ...(isMainTeacher ? ["mute-everyone", "security"] : []),
-      ];
+      // Step 3 — Create Jitsi instance with minimal mobile-safe config
+      console.log("[LiveClassroomRoom] Creating Jitsi instance, room:", jitsiRoomName(classId));
 
       const api = new window.JitsiMeetExternalAPI(JITSI_DOMAIN, {
         roomName: jitsiRoomName(classId),
@@ -247,49 +302,49 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           displayName: currentUser.name,
           email: currentUser.email,
         },
+        // Minimal config — heavy overrides break mobile Safari init.
+        // p2p disabled for stable group calls (JVB routing).
+        // disableDeepLinking prevents mobile "open in app" intercept.
         configOverwrite: {
+          prejoinPageEnabled: false,
           startWithAudioMuted: false,
           startWithVideoMuted: false,
           disableDeepLinking: true,
-          // Skip the pre-join lobby screen — everyone gets in immediately
-          prejoinPageEnabled: false,
-          enableLobbyChat: false,
-          requireDisplayName: false,
-          enableWelcomePage: false,
-          subject: classSession.title,
-          toolbarButtons,
-          // Force JVB (Jitsi Video Bridge) instead of P2P so group calls
-          // are routed through a stable media server — this is the main fix
-          // for the previous "assistant/student can't see teacher" issue.
           p2p: { enabled: false },
-          startBitrate: 800,
-          channelLastN: 20,
-        },
-        interfaceConfigOverwrite: {
-          SHOW_JITSI_WATERMARK: false,
-          SHOW_WATERMARK_FOR_GUESTS: false,
-          BRAND_WATERMARK_LINK: "",
-          DEFAULT_REMOTE_DISPLAY_NAME: "Participant",
-          APP_NAME: "We Are Kids LMS",
-          NATIVE_APP_NAME: "We Are Kids LMS",
-          PROVIDER_NAME: "We Are Kids",
-          HIDE_INVITE_MORE_HEADER: true,
         },
       });
 
+      console.log("[LiveClassroomRoom] Jitsi API ready, waiting for join…");
       jitsiApiRef.current = api;
+
+      // 10-second failsafe — show retry if videoConferenceJoined never fires
+      joinTimeoutRef.current = setTimeout(() => {
+        if (!cancelled) {
+          console.warn("[Jitsi] Join timeout — videoConferenceJoined never fired");
+          setError("Unable to join classroom. Please retry.");
+          setCanRetry(true);
+          setIsLoading(false);
+        }
+      }, 10_000);
 
       api.addEventListeners({
         videoConferenceJoined: () => {
+          console.log("[Jitsi] Join success — videoConferenceJoined");
+          if (joinTimeoutRef.current) {
+            clearTimeout(joinTimeoutRef.current);
+            joinTimeoutRef.current = null;
+          }
           if (!cancelled) {
             setIsLoading(false);
           }
         },
         videoConferenceLeft: () => {
+          console.log("[Jitsi] Conference left");
           void cleanup();
           router.push(dashboardPath);
         },
         readyToClose: () => {
+          console.log("[Jitsi] Ready to close");
           void cleanup();
           router.push(dashboardPath);
         },
@@ -302,7 +357,8 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     void initialize().catch((err: unknown) => {
       if (!cancelled) {
         console.error("[LiveClassroomRoom] Unhandled init error:", err);
-        setError("Classroom failed to start. Please refresh and try again.");
+        setError("Classroom failed to start. Please retry.");
+        setCanRetry(true);
         setIsLoading(false);
       }
     });
@@ -310,8 +366,9 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     return () => {
       cancelled = true;
     };
+    // retryKey is intentionally in deps to allow the retry flow to re-run
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthLoading, user]);
+  }, [isAuthLoading, user, retryKey]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -327,7 +384,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     try {
       await endLiveClass(classId, user.email);
     } catch {
-      /* non-fatal — cleanup regardless */
+      /* non-fatal */
     }
     await cleanup();
     router.push(dashboardPath);
@@ -361,8 +418,6 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     }
   }
 
-  // ── Redirect unauthenticated users ────────────────────────────────────────
-
   if (!isAuthLoading && !user) {
     router.push("/login");
     return null;
@@ -374,7 +429,6 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     <main className="flex h-screen flex-col bg-slate-900">
       {/* ── LMS Header Bar ─────────────────────────────────────────────── */}
       <header className="flex shrink-0 items-center justify-between gap-3 bg-slate-800/95 px-4 py-2.5 backdrop-blur-sm sm:px-6">
-        {/* Class info */}
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-emerald-500 shadow shadow-emerald-900/40">
             <span className="h-2 w-2 animate-pulse rounded-full bg-white" />
@@ -394,7 +448,6 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           )}
         </div>
 
-        {/* Role-based controls */}
         <div className="flex shrink-0 items-center gap-2">
           {isMainTeacher && (
             <button
@@ -455,17 +508,28 @@ export function LiveClassroomRoom({ classId, role }: Props) {
               <span className="text-2xl font-bold text-rose-400">!</span>
             </div>
             <p className="max-w-sm text-sm font-medium text-slate-200">{error}</p>
-            <button
-              type="button"
-              onClick={() => router.push(dashboardPath)}
-              className="rounded-xl bg-white/10 px-6 py-2.5 text-sm font-semibold text-white hover:bg-white/20"
-            >
-              Back to Dashboard
-            </button>
+            <div className="flex flex-col items-center gap-3 sm:flex-row">
+              {canRetry && (
+                <button
+                  type="button"
+                  onClick={handleRetry}
+                  className="rounded-xl bg-emerald-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-emerald-600"
+                >
+                  Retry Classroom
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => router.push(dashboardPath)}
+                className="rounded-xl bg-white/10 px-6 py-2.5 text-sm font-semibold text-white hover:bg-white/20"
+              >
+                Back to Dashboard
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Jitsi iframe mounts here */}
+        {/* Jitsi iframe mounts here — always in DOM so Jitsi can attach */}
         <div ref={jitsiContainerRef} className="h-full w-full" />
       </div>
     </main>
