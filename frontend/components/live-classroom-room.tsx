@@ -9,9 +9,8 @@
  * browsers / mobile), we:
  *   1. Fetch the LMS class session (auth-race-safe direct fetch + retry)
  *   2. Register presence in the LMS
- *   3. Build a role-aware Jitsi room URL and open it in a new tab
- *   4. Keep this page as the LMS "classroom hub" so End Class / recording
- *      controls remain accessible while the video call runs in the other tab
+ *   3. Request a signed JWT from the backend (moderator for main_teacher)
+ *   4. Render Jitsi inside a full-page <iframe> below the LMS header bar
  *
  * Auth-race fix (preserved):
  *  - Direct fetch() bypasses parseResponse/clearSession() so a transient 401
@@ -108,8 +107,11 @@ function resolveJitsiRole(lmsRole: string): JitsiRole {
  *   https://{domain}/{room}#config...
  *   → Plain public room, no server-enforced moderator role.
  *
- * Config overrides in the fragment disable the prejoin page and force JVB
- * routing (required for moderator mute-all, selective forwarding, etc.)
+ * Config overrides in the fragment:
+ *   - Disable prejoin page and deep-linking
+ *   - Force JVB routing (required for moderator mute-all, group calls)
+ *   - Enable audio processing: noise suppression, echo cancellation,
+ *     automatic gain control, noisy-mic detection
  */
 function buildJitsiUrlFromToken(
   tokenResponse: JitsiTokenResponse,
@@ -118,9 +120,19 @@ function buildJitsiUrlFromToken(
   const { token, room, domain, is_moderator } = tokenResponse;
 
   const fragments: string[] = [
+    // ── Join behaviour ───────────────────────────────────
     "config.prejoinPageEnabled=false",
     "config.disableDeepLinking=true",
+    // Force Video Bridge — required for groups > 2 and moderator features
     "config.p2p.enabled=false",
+    // ── Audio / noise reduction ──────────────────────────
+    // Keep all audio processing pipelines enabled for clean sound.
+    // These are Jitsi's built-in Webkit/browser AudioWorklet processors.
+    "config.disableAP=false",      // Audio Processing — master switch
+    "config.disableNS=false",      // Noise Suppression
+    "config.disableAEC=false",     // Acoustic Echo Cancellation
+    "config.disableAGC=false",     // Automatic Gain Control
+    "config.enableNoisyMicDetection=true",  // Warn user if mic is noisy
   ];
 
   if (displayName) {
@@ -156,9 +168,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   const [canRetry, setCanRetry] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [jitsiOpened, setJitsiOpened] = useState(false);
   const [jitsiUrl, setJitsiUrl] = useState("");
-  const [isModerator, setIsModerator] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
 
   const hasInitializedRef = useRef(false);
@@ -199,17 +209,9 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     setError("");
     setCanRetry(false);
     setSessionExpired(false);
-    setJitsiOpened(false);
     setJitsiUrl("");
     setIsLoading(true);
     setRetryKey((k) => k + 1);
-  }
-
-  // ── Open Jitsi room ───────────────────────────────────────────────────────
-
-  function openJitsiRoom(url: string) {
-    window.open(url, "_blank", "noopener,noreferrer");
-    setJitsiOpened(true);
   }
 
   // ── Initialization ─────────────────────────────────────────────────────────
@@ -338,11 +340,9 @@ export function LiveClassroomRoom({ classId, role }: Props) {
 
       if (cancelled) return;
 
-      setIsModerator(jitsiTokenData.is_moderator);
       const url = buildJitsiUrlFromToken(jitsiTokenData, currentUser.name);
       setJitsiUrl(url);
       setIsLoading(false);
-      openJitsiRoom(url);
 
       // ── Step 4: Poll every 15 s — redirect when class ends ─────────────
       pollRef.current = setInterval(async () => {
@@ -486,18 +486,20 @@ export function LiveClassroomRoom({ classId, role }: Props) {
         </div>
       </header>
 
-      {/* ── Main Area ────────────────────────────────────────────────────── */}
-      <div className="flex flex-1 items-center justify-center p-6">
-        {isLoading ? (
-          /* Loading state */
-          <div className="flex flex-col items-center gap-4 text-center">
+      {/* ── Video area — fills remaining screen height ───────────────────── */}
+      <div className="relative flex-1 overflow-hidden">
+        {/* Loading overlay */}
+        {isLoading && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-slate-900">
             <div className="h-10 w-10 animate-spin rounded-full border-4 border-emerald-500 border-t-transparent" />
             <p className="text-sm font-semibold text-slate-300">Setting up classroom…</p>
             <p className="text-xs text-slate-500">This will only take a moment</p>
           </div>
-        ) : error ? (
-          /* Error state */
-          <div className="flex flex-col items-center gap-5 text-center">
+        )}
+
+        {/* Error overlay */}
+        {!isLoading && error && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-5 bg-slate-900 p-8 text-center">
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-500/20">
               <span className="text-2xl font-bold text-rose-400">!</span>
             </div>
@@ -529,120 +531,16 @@ export function LiveClassroomRoom({ classId, role }: Props) {
               </button>
             </div>
           </div>
-        ) : (
-          /* Classroom hub — video call is running in a separate tab */
-          <div className="w-full max-w-md">
-            <div className="rounded-2xl border border-slate-700 bg-slate-800/60 p-8 text-center backdrop-blur-sm">
-              {/* Status icon */}
-              <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/20">
-                <span className="text-3xl">🎓</span>
-              </div>
+        )}
 
-              <h2 className="text-lg font-semibold text-white">
-                {session?.title ?? "Live Classroom"}
-              </h2>
-              {session && (
-                <>
-                  <p className="mt-1 text-sm text-slate-400">
-                    Hosted by {session.teacher_name}
-                  </p>
-                  {!isTeacher && (
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      Main teacher controls the classroom
-                    </p>
-                  )}
-                </>
-              )}
-
-              {/* Role badge */}
-              <div className="mt-4 flex justify-center">
-                {isModerator ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-500/20 px-3 py-1 text-xs font-semibold text-violet-300">
-                    <span className="h-1.5 w-1.5 rounded-full bg-violet-400" />
-                    Moderator — host controls active
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-700 px-3 py-1 text-xs font-semibold text-slate-400">
-                    <span className="h-1.5 w-1.5 rounded-full bg-slate-500" />
-                    Participant
-                  </span>
-                )}
-              </div>
-
-              {/* Room info */}
-              <div className="mt-4 rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-3 text-left">
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Room
-                </p>
-                <p className="mt-0.5 font-mono text-sm text-emerald-400">
-                  {jitsiRoomName(classId)}
-                </p>
-              </div>
-
-              {/* Open / Rejoin button */}
-              <button
-                type="button"
-                onClick={() => jitsiUrl && openJitsiRoom(jitsiUrl)}
-                className="mt-5 w-full rounded-xl bg-emerald-500 px-6 py-3 text-sm font-semibold text-white shadow shadow-emerald-900/30 hover:bg-emerald-600 active:bg-emerald-700"
-              >
-                {jitsiOpened ? "Rejoin Classroom" : "Open Classroom"}
-              </button>
-
-              {jitsiOpened && (
-                <p className="mt-3 text-xs text-slate-500">
-                  The classroom is open in another tab. Come back here to manage the session.
-                </p>
-              )}
-
-              {/* Reconnect hint */}
-              {!jitsiOpened && (
-                <p className="mt-3 text-xs text-slate-500">
-                  If the classroom did not open automatically, tap the button above.
-                </p>
-              )}
-            </div>
-
-            {/* Session controls card */}
-            <div className="mt-4 rounded-2xl border border-slate-700 bg-slate-800/40 p-5">
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Session Controls
-              </p>
-              <div className="mt-3 flex flex-col gap-2">
-                {isMainTeacher && (
-                  <button
-                    type="button"
-                    onClick={() => void handleToggleRecording()}
-                    className={`flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors ${
-                      isRecording
-                        ? "bg-rose-500/20 text-rose-400 hover:bg-rose-500/30"
-                        : "bg-slate-700 text-slate-200 hover:bg-slate-600"
-                    }`}
-                  >
-                    <span className={`h-2 w-2 rounded-full ${isRecording ? "animate-pulse bg-rose-400" : "bg-slate-500"}`} />
-                    {isRecording ? "Stop Recording" : "Start Recording"}
-                  </button>
-                )}
-
-                {isMainTeacher ? (
-                  <button
-                    type="button"
-                    onClick={() => void handleEndClass()}
-                    className="flex items-center justify-center gap-2 rounded-xl bg-rose-600/20 px-4 py-2.5 text-sm font-semibold text-rose-400 hover:bg-rose-600/30"
-                  >
-                    End Class for Everyone
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => void handleLeave()}
-                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-700 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:bg-slate-600"
-                  >
-                    Leave Class
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
+        {/* Jitsi iframe — rendered inline inside the LMS page, no new tab */}
+        {jitsiUrl && (
+          <iframe
+            src={jitsiUrl}
+            allow="camera; microphone; display-capture; autoplay; clipboard-write"
+            className="h-full w-full border-0"
+            title="Live Classroom"
+          />
         )}
       </div>
     </main>
