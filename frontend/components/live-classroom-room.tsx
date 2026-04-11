@@ -26,7 +26,7 @@ import {
   stopRecordingSession,
   type LiveClassSession,
 } from "@/lib/api";
-import { isMainTeacherRole, isTeacherRole } from "@/lib/demo-auth";
+import { getAccessToken, isMainTeacherRole, isTeacherRole } from "@/lib/demo-auth";
 
 // ─── Jitsi External API types (loaded via <script> at runtime) ──────────────
 
@@ -133,6 +133,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [canRetry, setCanRetry] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
 
@@ -197,6 +198,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     hasInitializedRef.current = false;
     setError("");
     setCanRetry(false);
+    setSessionExpired(false);
     setIsLoading(true);
     setRetryKey((k) => k + 1);
   }
@@ -212,14 +214,28 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     let cancelled = false;
 
     async function initialize() {
-      console.log("[LiveClassroomRoom] Initializing classId:", classId);
+      console.log("[LiveClassroomRoom] Initializing classId:", classId, "auth loading:", isAuthLoading);
+
+      // Guard: verify token exists before any authenticated request.
+      // parseResponse() calls clearSession() on 401, so a prior failed
+      // request can wipe the token while user is still in React state.
+      // If we fire fetchClassSession with no token we get 401 → wipe → loop.
+      const token = getAccessToken();
+      console.log("[LiveClassroomRoom] Token present:", Boolean(token));
+      if (!token) {
+        setSessionExpired(true);
+        setError("Your session has expired. Please sign in again.");
+        setIsLoading(false);
+        return;
+      }
 
       // Step 1 — Fetch LMS session
       let classSession: LiveClassSession;
       try {
         classSession = await fetchClassSession(classId);
-        console.log("[LiveClassroomRoom] Session status:", classSession.status);
-      } catch {
+        console.log("[LiveClassroomRoom] Session fetch OK — status:", classSession.status);
+      } catch (fetchErr) {
+        console.error("[LiveClassroomRoom] Session fetch failed:", fetchErr);
         if (!cancelled) {
           setError("Unable to load classroom. Please return to your dashboard.");
           setIsLoading(false);
@@ -509,7 +525,15 @@ export function LiveClassroomRoom({ classId, role }: Props) {
             </div>
             <p className="max-w-sm text-sm font-medium text-slate-200">{error}</p>
             <div className="flex flex-col items-center gap-3 sm:flex-row">
-              {canRetry && (
+              {sessionExpired ? (
+                <button
+                  type="button"
+                  onClick={() => router.push("/login")}
+                  className="rounded-xl bg-emerald-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-emerald-600"
+                >
+                  Sign In
+                </button>
+              ) : canRetry ? (
                 <button
                   type="button"
                   onClick={handleRetry}
@@ -517,7 +541,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
                 >
                   Retry Classroom
                 </button>
-              )}
+              ) : null}
               <button
                 type="button"
                 onClick={() => router.push(dashboardPath)}
