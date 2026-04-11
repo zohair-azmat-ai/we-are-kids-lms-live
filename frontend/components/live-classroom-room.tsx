@@ -77,30 +77,30 @@ function jitsiRoomName(classId: string): string {
 }
 
 /**
- * Builds a plain public Jitsi room URL (no JWT).
- * Uses public meet.jit.si — no backend token required.
- * Audio processing config is passed via URL fragment.
+ * Builds a plain public Jitsi room URL (no JWT, no extra config overrides).
+ *
+ * Kept minimal intentionally:
+ * - config.p2p.enabled is NOT overridden — public meet.jit.si uses P2P for
+ *   small rooms and JVB for larger ones. Forcing p2p=false breaks the
+ *   XMPP/JVB connection path on public servers → "Connection failed" error.
+ * - Audio processing flags are NOT set — meet.jit.si enables NS/AEC/AGC by
+ *   default; redundant fragment overrides can confuse its config parser.
+ * - Only prejoinPageEnabled=false and displayName are set.
  */
 function buildJitsiUrl(classId: string, displayName?: string): string {
   const room = jitsiRoomName(classId);
 
   const fragments: string[] = [
     "config.prejoinPageEnabled=false",
-    "config.disableDeepLinking=true",
-    "config.p2p.enabled=false",
-    // Audio processing
-    "config.disableAP=false",
-    "config.disableNS=false",
-    "config.disableAEC=false",
-    "config.disableAGC=false",
-    "config.enableNoisyMicDetection=true",
   ];
 
   if (displayName) {
     fragments.push(`userInfo.displayName=${encodeURIComponent(displayName)}`);
   }
 
-  return `https://${JITSI_DOMAIN}/${room}#${fragments.join("&")}`;
+  const url = `https://${JITSI_DOMAIN}/${room}#${fragments.join("&")}`;
+  console.log("[Jitsi] Final room URL:", url, "| jwt: none | mode: public iframe");
+  return url;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -262,6 +262,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
       if (cancelled) return;
 
       const url = buildJitsiUrl(classId, currentUser.name);
+      console.log("[LiveClassroomRoom] Setting iframe src:", url);
       setJitsiUrl(url);
       setIsLoading(false);
 
