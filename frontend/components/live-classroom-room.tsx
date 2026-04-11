@@ -420,49 +420,53 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
+  //
+  // Layout strategy (mobile-safe):
+  //   • Root <div> is position:fixed, covers 100% of the viewport — avoids
+  //     the broken 100vh / mobile browser-chrome shrink issue entirely.
+  //   • Minimal top bar: fixed height 44px, contains only essential controls.
+  //   • Jitsi <iframe> fills the remaining space via
+  //     position:absolute + top:44px + bottom:0 — no overflow clipping.
+  //   • Loading / error states use the same absolute overlay so they never
+  //     push content or break the layout.
+  //   • No card wrappers, no padding sections, no constrained containers.
 
   return (
-    <main className="flex min-h-screen flex-col bg-slate-900">
-      {/* ── LMS Header Bar ───────────────────────────────────────────────── */}
-      <header className="flex shrink-0 items-center justify-between gap-3 bg-slate-800/95 px-4 py-2.5 backdrop-blur-sm sm:px-6">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-emerald-500 shadow shadow-emerald-900/40">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-white" />
-          </div>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-white">
-              {session?.title ?? "Live Classroom"}
-            </p>
-            <p className="truncate text-xs text-slate-400">
-              {session
-                ? `Hosted by ${session.teacher_name}`
-                : isLoading
-                  ? "Setting up classroom…"
-                  : ""}
-            </p>
-          </div>
+    // Full-viewport fixed container — immune to mobile address-bar resize
+    <div
+      style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column", background: "#0f172a" }}
+    >
+      {/* ── Minimal top bar (44 px) ─────────────────────────────────────── */}
+      <div
+        style={{ height: 44, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px", background: "rgba(30,41,59,0.97)", zIndex: 10 }}
+      >
+        {/* Left: live dot + title */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#10b981", animation: "pulse 2s infinite", flexShrink: 0 }} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {session?.title ?? "Live Classroom"}
+          </span>
           {session && (
-            <span className="hidden shrink-0 rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-xs font-semibold text-emerald-400 sm:block">
-              Live
+            <span style={{ fontSize: 10, fontWeight: 700, color: "#34d399", background: "rgba(52,211,153,0.15)", borderRadius: 99, padding: "2px 8px", flexShrink: 0 }}>
+              LIVE
             </span>
           )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        {/* Right: recording + end/leave */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
           {isMainTeacher && session && (
             <button
               type="button"
               onClick={() => void handleToggleRecording()}
-              className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors ${
-                isRecording
-                  ? "bg-rose-500 text-white shadow shadow-rose-900/30"
-                  : "bg-slate-700 text-slate-200 hover:bg-slate-600"
-              }`}
+              style={{
+                display: "flex", alignItems: "center", gap: 4,
+                padding: "4px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none",
+                background: isRecording ? "#ef4444" : "#334155", color: "#f1f5f9",
+              }}
             >
-              <span className={`h-1.5 w-1.5 rounded-full ${isRecording ? "animate-pulse bg-white" : "bg-slate-400"}`} />
-              <span className="hidden sm:inline">
-                {isRecording ? "Stop Recording" : "Record"}
-              </span>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: isRecording ? "#fff" : "#94a3b8" }} />
+              {isRecording ? "Stop" : "Rec"}
             </button>
           )}
 
@@ -470,7 +474,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
             <button
               type="button"
               onClick={() => void handleEndClass()}
-              className="rounded-xl bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white shadow shadow-rose-900/30 hover:bg-rose-700"
+              style={{ padding: "4px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none", background: "#dc2626", color: "#fff" }}
             >
               End Class
             </button>
@@ -478,38 +482,38 @@ export function LiveClassroomRoom({ classId, role }: Props) {
             <button
               type="button"
               onClick={() => void handleLeave()}
-              className="rounded-xl bg-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-100 hover:bg-slate-500"
+              style={{ padding: "4px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none", background: "#475569", color: "#f1f5f9" }}
             >
               Leave
             </button>
           )}
         </div>
-      </header>
+      </div>
 
-      {/* ── Video area — fills remaining screen height ───────────────────── */}
-      <div className="relative flex-1 overflow-hidden">
-        {/* Loading overlay */}
+      {/* ── Call area — absolute, fills everything below the top bar ────── */}
+      <div style={{ position: "absolute", top: 44, left: 0, right: 0, bottom: 0 }}>
+
+        {/* Loading state */}
         {isLoading && (
-          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-slate-900">
-            <div className="h-10 w-10 animate-spin rounded-full border-4 border-emerald-500 border-t-transparent" />
-            <p className="text-sm font-semibold text-slate-300">Setting up classroom…</p>
-            <p className="text-xs text-slate-500">This will only take a moment</p>
+          <div style={{ position: "absolute", inset: 0, zIndex: 20, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, background: "#0f172a" }}>
+            <div style={{ width: 40, height: 40, borderRadius: "50%", border: "4px solid #10b981", borderTopColor: "transparent", animation: "spin 0.8s linear infinite" }} />
+            <p style={{ fontSize: 14, fontWeight: 600, color: "#cbd5e1" }}>Setting up classroom…</p>
           </div>
         )}
 
-        {/* Error overlay */}
+        {/* Error state */}
         {!isLoading && error && (
-          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-5 bg-slate-900 p-8 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-500/20">
-              <span className="text-2xl font-bold text-rose-400">!</span>
+          <div style={{ position: "absolute", inset: 0, zIndex: 20, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20, background: "#0f172a", padding: 32, textAlign: "center" }}>
+            <div style={{ width: 56, height: 56, borderRadius: 16, background: "rgba(239,68,68,0.15)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <span style={{ fontSize: 24, fontWeight: 700, color: "#f87171" }}>!</span>
             </div>
-            <p className="max-w-sm text-sm font-medium text-slate-200">{error}</p>
-            <div className="flex flex-col items-center gap-3 sm:flex-row">
+            <p style={{ fontSize: 14, fontWeight: 500, color: "#e2e8f0", maxWidth: 360 }}>{error}</p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center" }}>
               {sessionExpired ? (
                 <button
                   type="button"
                   onClick={() => router.push("/login")}
-                  className="rounded-xl bg-emerald-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-emerald-600"
+                  style={{ padding: "10px 24px", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "none", background: "#10b981", color: "#fff" }}
                 >
                   Sign In
                 </button>
@@ -517,7 +521,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
                 <button
                   type="button"
                   onClick={handleRetry}
-                  className="rounded-xl bg-emerald-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-emerald-600"
+                  style={{ padding: "10px 24px", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "none", background: "#10b981", color: "#fff" }}
                 >
                   Retry
                 </button>
@@ -525,7 +529,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
               <button
                 type="button"
                 onClick={() => router.push(dashboardPath)}
-                className="rounded-xl bg-white/10 px-6 py-2.5 text-sm font-semibold text-white hover:bg-white/20"
+                style={{ padding: "10px 24px", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "none", background: "rgba(255,255,255,0.1)", color: "#f1f5f9" }}
               >
                 Back to Dashboard
               </button>
@@ -533,16 +537,16 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           </div>
         )}
 
-        {/* Jitsi iframe — rendered inline inside the LMS page, no new tab */}
+        {/* Jitsi iframe — full area, no clipping */}
         {jitsiUrl && (
           <iframe
             src={jitsiUrl}
             allow="camera; microphone; display-capture; autoplay; clipboard-write"
-            className="h-full w-full border-0"
+            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none", display: "block" }}
             title="Live Classroom"
           />
         )}
       </div>
-    </main>
+    </div>
   );
 }
