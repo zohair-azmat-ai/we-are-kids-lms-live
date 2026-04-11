@@ -3,14 +3,15 @@
 /**
  * LiveClassroomRoom — Jitsi Meet integration
  *
- * Fixes for mobile (Safari + Chrome):
- *  - loadJitsiScript: poll for window.JitsiMeetExternalAPI when the
- *    script tag already exists (avoids "load" event miss on re-mount)
- *  - 10-second join timeout: if videoConferenceJoined never fires,
- *    show "Unable to join" error with a Retry button
- *  - Minimal configOverwrite: removes deprecated interfaceConfigOverwrite
- *    and complex keys that break mobile init
- *  - Debug logs throughout initialization flow
+ * Auth-race fix (this file):
+ *  - fetchClassSession is replaced by a direct authenticated fetch that
+ *    does NOT call clearSession() on 401. This means a transient 401
+ *    (auth still settling) is safe to retry once after 500 ms without
+ *    losing the token for the retry.
+ *  - isFetchingClassRef prevents concurrent fetches inside initialize().
+ *  - hasInitializedRef prevents initialize() from running more than once
+ *    per page-load / retry cycle.
+ *  - Debug logs at every step for easy diagnosis.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -18,8 +19,9 @@ import { useRouter } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
 import {
+  ApiError,
   endLiveClass,
-  fetchClassSession,
+  getApiBaseUrl,
   joinClassPresence,
   leaveClassPresence,
   startRecordingSession,
@@ -28,7 +30,7 @@ import {
 } from "@/lib/api";
 import { getAccessToken, isMainTeacherRole, isTeacherRole } from "@/lib/demo-auth";
 
-// ─── Jitsi External API types (loaded via <script> at runtime) ──────────────
+// ─── Jitsi External API types ────────────────────────────────────────────────
 
 interface JitsiMeetOptions {
   roomName: string;
@@ -51,7 +53,7 @@ declare global {
   }
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Types & constants ───────────────────────────────────────────────────────
 
 type Props = {
   classId: string;
@@ -64,17 +66,15 @@ function jitsiRoomName(classId: string): string {
   return `wearekids${classId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()}`;
 }
 
+// ─── Script loader ───────────────────────────────────────────────────────────
+
 /**
  * Loads the Jitsi External API script with a polling fallback.
- *
- * The bug this fixes: if the <script> tag already exists in the DOM
- * (React Strict Mode double-invoke, hot-reload) but hasn't finished
- * loading yet, the "load" event has already fired and a new listener
- * will never resolve. We poll window.JitsiMeetExternalAPI instead.
+ * Polling avoids the "load" event miss when the <script> tag was already
+ * injected (React Strict Mode double-invoke, hot-reload).
  */
 function loadJitsiScript(domain: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    // Already loaded — fast path
     if (typeof window !== "undefined" && window.JitsiMeetExternalAPI) {
       console.log("[Jitsi] Script already loaded (fast path)");
       resolve();
@@ -101,13 +101,10 @@ function loadJitsiScript(domain: string): Promise<void> {
 
     const existing = document.getElementById(scriptId);
     if (existing) {
-      // Script tag is in the DOM — may or may not have loaded yet.
-      // Poll instead of relying on a "load" event that may have already fired.
       startPolling();
       return;
     }
 
-    // Inject the script tag for the first time
     const script = document.createElement("script");
     script.id = scriptId;
     script.src = `https://${domain}/external_api.js`;
@@ -140,6 +137,8 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   const jitsiContainerRef = useRef<HTMLDivElement>(null);
   const jitsiApiRef = useRef<JitsiMeetAPI | null>(null);
   const hasInitializedRef = useRef(false);
+  /** Prevents a second concurrent fetchSessionWithRetry() call. */
+  const isFetchingClassRef = useRef(false);
   const recordingIdRef = useRef<string | null>(null);
   const presenceJoinedRef = useRef(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -161,11 +160,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
       pollRef.current = null;
     }
     if (jitsiApiRef.current) {
-      try {
-        jitsiApiRef.current.dispose();
-      } catch {
-        /* ignore */
-      }
+      try { jitsiApiRef.current.dispose(); } catch { /* ignore */ }
       jitsiApiRef.current = null;
     }
     if (presenceJoinedRef.current && user) {
@@ -177,9 +172,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           participantEmail: user.email,
           participantName: user.name,
         });
-      } catch {
-        /* non-fatal */
-      }
+      } catch { /* non-fatal */ }
     }
   }, [classId, user, isTeacher]);
 
@@ -196,6 +189,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
       joinTimeoutRef.current = null;
     }
     hasInitializedRef.current = false;
+    isFetchingClassRef.current = false;
     setError("");
     setCanRetry(false);
     setSessionExpired(false);
@@ -206,20 +200,23 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   // ── Initialization ─────────────────────────────────────────────────────────
 
   useEffect(() => {
-    if (isAuthLoading || !user) return;
-    if (hasInitializedRef.current) return;
+    if (isAuthLoading || !user) {
+      console.log("[LiveClassroomRoom] Waiting — auth loading:", isAuthLoading, "user:", Boolean(user));
+      return;
+    }
+    if (hasInitializedRef.current) {
+      console.log("[LiveClassroomRoom] Skipped — already initialized");
+      return;
+    }
     hasInitializedRef.current = true;
 
     const currentUser = user;
     let cancelled = false;
 
     async function initialize() {
-      console.log("[LiveClassroomRoom] Initializing classId:", classId, "auth loading:", isAuthLoading);
+      console.log("[LiveClassroomRoom] Init start — classId:", classId);
 
-      // Guard: verify token exists before any authenticated request.
-      // parseResponse() calls clearSession() on 401, so a prior failed
-      // request can wipe the token while user is still in React state.
-      // If we fire fetchClassSession with no token we get 401 → wipe → loop.
+      // ── Guard: token must exist ───────────────────────────────────────────
       const token = getAccessToken();
       console.log("[LiveClassroomRoom] Token present:", Boolean(token));
       if (!token) {
@@ -229,20 +226,75 @@ export function LiveClassroomRoom({ classId, role }: Props) {
         return;
       }
 
-      // Step 1 — Fetch LMS session
+      // ── Guard: prevent concurrent fetch ──────────────────────────────────
+      if (isFetchingClassRef.current) {
+        console.log("[LiveClassroomRoom] Skipped — class fetch already in progress");
+        return;
+      }
+      isFetchingClassRef.current = true;
+
+      // ── Step 1: Fetch class session ───────────────────────────────────────
+      //
+      // We use a direct fetch() instead of fetchClassSession() (which routes
+      // through requestCachedJson → parseResponse → clearSession() on 401).
+      // By owning the fetch we can:
+      //   a) preserve the token for the retry (clearSession() not called)
+      //   b) retry exactly once after 500 ms on a transient 401
+      //   c) distinguish 401 from other errors for the right UI message
+      //
+      const apiBase = getApiBaseUrl();
+
+      async function doFetchSession(): Promise<LiveClassSession> {
+        const resp = await fetch(`${apiBase}/api/v1/classes/${classId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        console.log("[LiveClassroomRoom] fetchClassSession HTTP status:", resp.status);
+        if (!resp.ok) {
+          const body = (await resp.json().catch(() => ({}))) as { detail?: string };
+          throw new ApiError(body.detail ?? "Class session request failed.", resp.status);
+        }
+        return resp.json() as Promise<LiveClassSession>;
+      }
+
+      async function fetchSessionWithRetry(): Promise<LiveClassSession> {
+        try {
+          return await doFetchSession();
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 401) {
+            // Transient 401 — auth may still be settling. Wait 500 ms and
+            // retry once with the same saved token. Because we skip
+            // parseResponse / clearSession(), the token is still intact.
+            console.warn("[LiveClassroomRoom] 401 on session fetch — retrying in 500ms…");
+            await new Promise((r) => setTimeout(r, 500));
+            if (cancelled) throw err;
+            console.log("[LiveClassroomRoom] Retrying class session fetch…");
+            return doFetchSession();
+          }
+          throw err;
+        }
+      }
+
       let classSession: LiveClassSession;
       try {
-        classSession = await fetchClassSession(classId);
+        classSession = await fetchSessionWithRetry();
         console.log("[LiveClassroomRoom] Session fetch OK — status:", classSession.status);
       } catch (fetchErr) {
-        console.error("[LiveClassroomRoom] Session fetch failed:", fetchErr);
+        console.error("[LiveClassroomRoom] Session fetch failed (after retry):", fetchErr);
+        isFetchingClassRef.current = false;
         if (!cancelled) {
-          setError("Unable to load classroom. Please return to your dashboard.");
+          if (fetchErr instanceof ApiError && fetchErr.status === 401) {
+            setSessionExpired(true);
+            setError("Your session has expired. Please sign in again.");
+          } else {
+            setError("Unable to load classroom. Please return to your dashboard.");
+          }
           setIsLoading(false);
         }
         return;
       }
 
+      isFetchingClassRef.current = false;
       if (cancelled) return;
 
       // Students can only join a live session
@@ -254,7 +306,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
 
       setSession(classSession);
 
-      // Register LMS presence (non-fatal)
+      // ── Step 2: Register LMS presence ────────────────────────────────────
       try {
         await joinClassPresence({
           classId,
@@ -263,13 +315,12 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           participantName: currentUser.name,
         });
         presenceJoinedRef.current = true;
-      } catch {
-        /* non-fatal */
-      }
+        console.log("[LiveClassroomRoom] Presence registered");
+      } catch { /* non-fatal */ }
 
       if (cancelled) return;
 
-      // Step 2 — Load Jitsi External API script
+      // ── Step 3: Load Jitsi External API script ───────────────────────────
       console.log("[LiveClassroomRoom] Loading Jitsi script from:", JITSI_DOMAIN);
       try {
         await loadJitsiScript(JITSI_DOMAIN);
@@ -293,20 +344,24 @@ export function LiveClassroomRoom({ classId, role }: Props) {
         return;
       }
 
-      // Poll session every 15 s — redirect when class ends
+      // Poll every 15 s — redirect when the class ends
       pollRef.current = setInterval(async () => {
         try {
-          const updated = await fetchClassSession(classId);
-          if (updated.status === "ended") {
-            void cleanup();
-            router.push(dashboardPath);
+          const resp = await fetch(`${apiBase}/api/v1/classes/${classId}`, {
+            headers: { Authorization: `Bearer ${getAccessToken()}` },
+            cache: "no-store",
+          });
+          if (resp.ok) {
+            const updated = (await resp.json()) as LiveClassSession;
+            if (updated.status === "ended") {
+              void cleanup();
+              router.push(dashboardPath);
+            }
           }
-        } catch {
-          /* ignore */
-        }
+        } catch { /* ignore poll errors */ }
       }, 15_000);
 
-      // Step 3 — Create Jitsi instance with minimal mobile-safe config
+      // ── Step 4: Create Jitsi instance ────────────────────────────────────
       console.log("[LiveClassroomRoom] Creating Jitsi instance, room:", jitsiRoomName(classId));
 
       const api = new window.JitsiMeetExternalAPI(JITSI_DOMAIN, {
@@ -318,9 +373,6 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           displayName: currentUser.name,
           email: currentUser.email,
         },
-        // Minimal config — heavy overrides break mobile Safari init.
-        // p2p disabled for stable group calls (JVB routing).
-        // disableDeepLinking prevents mobile "open in app" intercept.
         configOverwrite: {
           prejoinPageEnabled: false,
           startWithAudioMuted: false,
@@ -330,10 +382,10 @@ export function LiveClassroomRoom({ classId, role }: Props) {
         },
       });
 
-      console.log("[LiveClassroomRoom] Jitsi API ready, waiting for join…");
+      console.log("[LiveClassroomRoom] Jitsi API ready — waiting for join…");
       jitsiApiRef.current = api;
 
-      // 10-second failsafe — show retry if videoConferenceJoined never fires
+      // 10-second failsafe for videoConferenceJoined
       joinTimeoutRef.current = setTimeout(() => {
         if (!cancelled) {
           console.warn("[Jitsi] Join timeout — videoConferenceJoined never fired");
@@ -350,9 +402,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
             clearTimeout(joinTimeoutRef.current);
             joinTimeoutRef.current = null;
           }
-          if (!cancelled) {
-            setIsLoading(false);
-          }
+          if (!cancelled) setIsLoading(false);
         },
         videoConferenceLeft: () => {
           console.log("[Jitsi] Conference left");
@@ -373,6 +423,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     void initialize().catch((err: unknown) => {
       if (!cancelled) {
         console.error("[LiveClassroomRoom] Unhandled init error:", err);
+        isFetchingClassRef.current = false;
         setError("Classroom failed to start. Please retry.");
         setCanRetry(true);
         setIsLoading(false);
@@ -382,26 +433,20 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     return () => {
       cancelled = true;
     };
-    // retryKey is intentionally in deps to allow the retry flow to re-run
+    // retryKey re-triggers this effect after handleRetry() resets hasInitializedRef
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthLoading, user, retryKey]);
 
   // Cleanup on unmount
   useEffect(() => {
-    return () => {
-      void cleanup();
-    };
+    return () => { void cleanup(); };
   }, [cleanup]);
 
   // ── LMS Controls ──────────────────────────────────────────────────────────
 
   async function handleEndClass() {
     if (!user) return;
-    try {
-      await endLiveClass(classId, user.email);
-    } catch {
-      /* non-fatal */
-    }
+    try { await endLiveClass(classId, user.email); } catch { /* non-fatal */ }
     await cleanup();
     router.push(dashboardPath);
   }
@@ -418,9 +463,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
         const result = await startRecordingSession({ classId, title: session.title });
         recordingIdRef.current = result.recording_id;
         setIsRecording(true);
-      } catch {
-        /* non-fatal */
-      }
+      } catch { /* non-fatal */ }
     } else {
       try {
         if (recordingIdRef.current) {
@@ -428,9 +471,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
         }
         setIsRecording(false);
         recordingIdRef.current = null;
-      } catch {
-        /* non-fatal */
-      }
+      } catch { /* non-fatal */ }
     }
   }
 
@@ -475,11 +516,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
                   : "bg-slate-700 text-slate-200 hover:bg-slate-600"
               }`}
             >
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${
-                  isRecording ? "animate-pulse bg-white" : "bg-slate-400"
-                }`}
-              />
+              <span className={`h-1.5 w-1.5 rounded-full ${isRecording ? "animate-pulse bg-white" : "bg-slate-400"}`} />
               <span className="hidden sm:inline">
                 {isRecording ? "Stop Recording" : "Record"}
               </span>
@@ -508,7 +545,6 @@ export function LiveClassroomRoom({ classId, role }: Props) {
 
       {/* ── Video Call Area ─────────────────────────────────────────────── */}
       <div className="relative flex-1 overflow-hidden">
-        {/* Loading overlay */}
         {isLoading && !error && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-slate-900">
             <div className="h-10 w-10 animate-spin rounded-full border-4 border-emerald-500 border-t-transparent" />
@@ -517,7 +553,6 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           </div>
         )}
 
-        {/* Error overlay */}
         {error && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-5 bg-slate-900 p-8 text-center">
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-500/20">
