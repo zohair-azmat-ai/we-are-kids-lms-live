@@ -48,13 +48,11 @@ import { useAuth } from "@/components/auth-provider";
 import {
   ApiError,
   endLiveClass,
-  fetchJitsiToken,
   getApiBaseUrl,
   joinClassPresence,
   leaveClassPresence,
   startRecordingSession,
   stopRecordingSession,
-  type JitsiTokenResponse,
   type LiveClassSession,
 } from "@/lib/api";
 import { getAccessToken, isMainTeacherRole, isTeacherRole } from "@/lib/demo-auth";
@@ -78,82 +76,31 @@ function jitsiRoomName(classId: string): string {
   return `wearekids${classId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()}`;
 }
 
-// ── Role mapping ───────────────────────────────────────────────────────────
-// Maps LMS roles to Jitsi participant roles.
-// On a private Jitsi server with JWT auth, this value is embedded in the
-// signed token so the server enforces it. On public meet.jit.si it is
-// informational only (no server enforcement).
-//
-//   main_teacher      → "moderator"   full room control (mute, kick, lock)
-//   assistant_teacher → "participant" can present; no admin power
-//   student           → "participant" audio/video, no admin power
-type JitsiRole = "moderator" | "participant";
-
-function resolveJitsiRole(lmsRole: string): JitsiRole {
-  // main_teacher is the designated host / moderator.
-  // assistant_teacher and student are regular participants.
-  return lmsRole === "main_teacher" ? "moderator" : "participant";
-}
-
 /**
- * Builds the final Jitsi room URL from a backend-issued token response.
- *
- * If token is present (private server with JWT auth):
- *   https://{domain}/{room}?jwt={token}#config...
- *   → Prosody/Jicofo reads context.user.moderator from the JWT and grants
- *     host privileges to main_teacher automatically, no login prompt.
- *
- * If token is null (dev / public meet.jit.si, JITSI_APP_SECRET not set):
- *   https://{domain}/{room}#config...
- *   → Plain public room, no server-enforced moderator role.
- *
- * Config overrides in the fragment:
- *   - Disable prejoin page and deep-linking
- *   - Force JVB routing (required for moderator mute-all, group calls)
- *   - Enable audio processing: noise suppression, echo cancellation,
- *     automatic gain control, noisy-mic detection
+ * Builds a plain public Jitsi room URL (no JWT).
+ * Uses public meet.jit.si — no backend token required.
+ * Audio processing config is passed via URL fragment.
  */
-function buildJitsiUrlFromToken(
-  tokenResponse: JitsiTokenResponse,
-  displayName?: string,
-): string {
-  const { token, room, domain, is_moderator } = tokenResponse;
+function buildJitsiUrl(classId: string, displayName?: string): string {
+  const room = jitsiRoomName(classId);
 
   const fragments: string[] = [
-    // ── Join behaviour ───────────────────────────────────
     "config.prejoinPageEnabled=false",
     "config.disableDeepLinking=true",
-    // Force Video Bridge — required for groups > 2 and moderator features
     "config.p2p.enabled=false",
-    // ── Audio / noise reduction ──────────────────────────
-    // Keep all audio processing pipelines enabled for clean sound.
-    // These are Jitsi's built-in Webkit/browser AudioWorklet processors.
-    "config.disableAP=false",      // Audio Processing — master switch
-    "config.disableNS=false",      // Noise Suppression
-    "config.disableAEC=false",     // Acoustic Echo Cancellation
-    "config.disableAGC=false",     // Automatic Gain Control
-    "config.enableNoisyMicDetection=true",  // Warn user if mic is noisy
+    // Audio processing
+    "config.disableAP=false",
+    "config.disableNS=false",
+    "config.disableAEC=false",
+    "config.disableAGC=false",
+    "config.enableNoisyMicDetection=true",
   ];
 
   if (displayName) {
     fragments.push(`userInfo.displayName=${encodeURIComponent(displayName)}`);
   }
 
-  const fragment = fragments.join("&");
-
-  if (typeof window !== "undefined") {
-    console.log(
-      `[Jitsi] Opening room "${room}" on "${domain}" | moderator=${is_moderator} | jwt=${token ? "present" : "none (dev mode)"}`,
-    );
-  }
-
-  // JWT present → append as query param so private server can enforce roles
-  if (token) {
-    return `https://${domain}/${room}?jwt=${token}#${fragment}`;
-  }
-
-  // No JWT → plain URL (public meet.jit.si or private server without JWT auth)
-  return `https://${domain}/${room}#${fragment}`;
+  return `https://${JITSI_DOMAIN}/${room}#${fragments.join("&")}`;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -311,36 +258,10 @@ export function LiveClassroomRoom({ classId, role }: Props) {
 
       if (cancelled) return;
 
-      // ── Step 3: Request Jitsi token from backend ───────────────────────
-      // The backend verifies LMS auth, resolves the moderator flag
-      // (main_teacher → moderator=true, everyone else → false), and signs
-      // a JWT with JITSI_APP_SECRET if configured.
-      //
-      // On a private Jitsi server: the signed JWT is appended as ?jwt=...
-      // so Prosody/Jicofo grants host privileges to main_teacher automatically.
-      //
-      // On public meet.jit.si / no JITSI_APP_SECRET: token=null is returned
-      // and the frontend falls back to a plain room URL (dev mode).
-      let jitsiTokenData: JitsiTokenResponse;
-      try {
-        jitsiTokenData = await fetchJitsiToken(classId);
-        console.log(
-          `[LiveClassroomRoom] Jitsi token fetched — moderator=${jitsiTokenData.is_moderator} jwt=${jitsiTokenData.token ? "yes" : "no"}`,
-        );
-      } catch (tokenErr) {
-        // Non-fatal: fall back to a plain public URL without JWT
-        console.warn("[LiveClassroomRoom] Jitsi token fetch failed, falling back to plain URL:", tokenErr);
-        jitsiTokenData = {
-          token: null,
-          room: jitsiRoomName(classId),
-          domain: JITSI_DOMAIN,
-          is_moderator: isMainTeacher,
-        };
-      }
-
+      // ── Step 3: Build plain public Jitsi URL (no JWT) ─────────────────
       if (cancelled) return;
 
-      const url = buildJitsiUrlFromToken(jitsiTokenData, currentUser.name);
+      const url = buildJitsiUrl(classId, currentUser.name);
       setJitsiUrl(url);
       setIsLoading(false);
 
