@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
 import { DashboardShell } from "@/components/dashboard-shell";
-import { fetchLiveClasses, fetchRecordings, type RecordingItem } from "@/lib/api";
+import { fetchLiveClasses, fetchRecordings, type LiveClassSession, type RecordingItem } from "@/lib/api";
 
 function isValidClassId(value: unknown): value is string {
   return (
@@ -22,9 +22,24 @@ export default function StudentDashboardPage() {
   const { user } = useAuth();
   const [isJoining, setIsJoining] = useState(false);
   const [error, setError] = useState("");
+  const [liveClasses, setLiveClasses] = useState<LiveClassSession[]>([]);
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
   const [isLoadingRecordings, setIsLoadingRecordings] = useState(true);
   const [recordingsError, setRecordingsError] = useState("");
+
+  // Poll for live classes every 15 s so the card updates without a reload
+  useEffect(() => {
+    async function checkLive() {
+      try {
+        const classes = await fetchLiveClasses();
+        setLiveClasses(classes);
+      } catch { /* non-fatal — card stays in "not live" state */ }
+    }
+
+    void checkLive();
+    const interval = setInterval(() => { void checkLive(); }, 15_000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     async function loadRecordings() {
@@ -105,27 +120,64 @@ export default function StudentDashboardPage() {
           </div>
         </section>
 
-        <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
-          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-red-500">
-            Today&apos;s Lesson
-          </p>
-          <h2 className="mt-4 text-2xl font-semibold text-slate-800">
-            Join your class when it starts
-          </h2>
-          <button
-            type="button"
-            onClick={handleJoinClass}
-            disabled={isJoining}
-            className="mt-6 inline-flex items-center justify-center rounded-full bg-red-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-red-100 disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {isJoining ? "Joining..." : "Join Class"}
-          </button>
-          {error ? (
-            <div className="mt-4 rounded-[1.25rem] border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
-              {error}
+        {/* Today's Lesson — state driven by live class poll */}
+        {liveClasses.length > 0 ? (
+          <section className="rounded-[2rem] border border-emerald-100 bg-white p-6 shadow-soft ring-1 ring-emerald-200">
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-600">
+                Today&apos;s Lesson
+              </p>
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-2.5 py-0.5 text-xs font-semibold text-white">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+                Live
+              </span>
             </div>
-          ) : null}
-        </section>
+            <h2 className="mt-4 text-2xl font-semibold text-slate-800">
+              {liveClasses[0].title ?? "Join your live class now"}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {liveClasses[0].teacher_name
+                ? `${liveClasses[0].teacher_name} is teaching right now`
+                : "Your class is live right now"}
+            </p>
+            <button
+              type="button"
+              onClick={handleJoinClass}
+              disabled={isJoining}
+              className="mt-6 inline-flex items-center justify-center gap-2 rounded-full bg-emerald-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-100 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              <span className="h-2 w-2 animate-pulse rounded-full bg-white" />
+              {isJoining ? "Joining..." : "Join Live Class"}
+            </button>
+            {error ? (
+              <div className="mt-4 rounded-[1.25rem] border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
+                {error}
+              </div>
+            ) : null}
+          </section>
+        ) : (
+          <section className="rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
+            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-red-500">
+              Today&apos;s Lesson
+            </p>
+            <h2 className="mt-4 text-2xl font-semibold text-slate-800">
+              Join your class when it starts
+            </h2>
+            <button
+              type="button"
+              onClick={handleJoinClass}
+              disabled={isJoining}
+              className="mt-6 inline-flex items-center justify-center rounded-full bg-red-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-red-100 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {isJoining ? "Joining..." : "Join Class"}
+            </button>
+            {error ? (
+              <div className="mt-4 rounded-[1.25rem] border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
+                {error}
+              </div>
+            ) : null}
+          </section>
+        )}
       </div>
 
       <section className="mt-8 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-soft">
