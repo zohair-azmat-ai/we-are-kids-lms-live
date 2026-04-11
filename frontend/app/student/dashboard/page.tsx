@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
 import { DashboardShell } from "@/components/dashboard-shell";
-import { fetchLiveClasses, fetchRecordings, type LiveClassSession, type RecordingItem } from "@/lib/api";
+import { fetchRecordings, getApiBaseUrl, type LiveClassSession, type RecordingItem } from "@/lib/api";
+import { getAccessToken } from "@/lib/demo-auth";
 
 function isValidClassId(value: unknown): value is string {
   return (
@@ -27,17 +28,45 @@ export default function StudentDashboardPage() {
   const [isLoadingRecordings, setIsLoadingRecordings] = useState(true);
   const [recordingsError, setRecordingsError] = useState("");
 
-  // Poll for live classes every 15 s so the card updates without a reload
+  // Poll for live classes every 10 s.
+  // Uses a direct fetch() — NOT fetchLiveClasses() — to bypass the 20s
+  // in-memory cache in requestCachedJson. Without this, an empty result
+  // on first load is served from cache on subsequent polls, so the student
+  // card stays "not live" even after the teacher has started the class.
   useEffect(() => {
+    const apiBase = getApiBaseUrl();
+
     async function checkLive() {
+      const token = getAccessToken();
+      if (!token) {
+        console.log("[StudentDashboard] checkLive: no token yet, skipping");
+        return;
+      }
       try {
-        const classes = await fetchLiveClasses();
+        const resp = await fetch(`${apiBase}/api/v1/classes/live`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (!resp.ok) {
+          console.warn("[StudentDashboard] checkLive: HTTP", resp.status);
+          return;
+        }
+        const classes = (await resp.json()) as LiveClassSession[];
+        console.log(
+          "[StudentDashboard] checkLive: received",
+          classes.length,
+          "live class(es)",
+          classes.map((c) => ({ id: c.class_id, title: c.title, teacher: c.teacher_name })),
+        );
         setLiveClasses(classes);
-      } catch { /* non-fatal — card stays in "not live" state */ }
+      } catch (err) {
+        console.warn("[StudentDashboard] checkLive error:", err);
+        // non-fatal — card stays in "not live" state
+      }
     }
 
     void checkLive();
-    const interval = setInterval(() => { void checkLive(); }, 15_000);
+    const interval = setInterval(() => { void checkLive(); }, 10_000);
     return () => clearInterval(interval);
   }, []);
 
@@ -71,8 +100,15 @@ export default function StudentDashboardPage() {
       setIsJoining(true);
       setError("");
 
-      const liveClasses = await fetchLiveClasses();
-      console.log("[StudentDashboard] fetchLiveClasses response:", liveClasses);
+      // Direct fetch — bypass requestCachedJson so we always get fresh state
+      const apiBase = getApiBaseUrl();
+      const token = getAccessToken();
+      const resp = await fetch(`${apiBase}/api/v1/classes/live`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        cache: "no-store",
+      });
+      const liveClasses = resp.ok ? ((await resp.json()) as LiveClassSession[]) : [];
+      console.log("[StudentDashboard] handleJoinClass: live classes", liveClasses);
 
       if (!liveClasses.length) {
         setError("No live class is available right now.");
