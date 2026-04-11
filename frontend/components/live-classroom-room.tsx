@@ -3,19 +3,45 @@
 /**
  * LiveClassroomRoom — direct Jitsi room launch
  *
+ * Architecture
+ * ────────────
  * Instead of embedding the Jitsi External API (which was fragile across
  * browsers / mobile), we:
- *   1. Fetch the LMS class session (with auth-race-safe direct fetch + retry)
+ *   1. Fetch the LMS class session (auth-race-safe direct fetch + retry)
  *   2. Register presence in the LMS
- *   3. Build a stable Jitsi room URL and open it in a new tab
+ *   3. Build a role-aware Jitsi room URL and open it in a new tab
  *   4. Keep this page as the LMS "classroom hub" so End Class / recording
  *      controls remain accessible while the video call runs in the other tab
  *
- * Auth-race fix (preserved from previous iteration):
+ * Auth-race fix (preserved):
  *  - Direct fetch() bypasses parseResponse/clearSession() so a transient 401
  *    does not wipe the token before the retry.
  *  - isFetchingClassRef prevents concurrent fetches (React Strict Mode / retryKey).
  *  - hasInitializedRef prevents initialize() from running more than once.
+ *
+ * ── Private / Self-Hosted Jitsi (production) ──────────────────────────────
+ *
+ * For full moderator control (main teacher can mute/remove participants,
+ * lock the room, control recording) you MUST run a private Jitsi server
+ * with JWT authentication enabled.
+ *
+ * Role mapping:
+ *   main_teacher      → "moderator"  (host — full room control)
+ *   assistant_teacher → "participant" (can present; no kick/mute power)
+ *   student           → "participant" (view + audio/video only)
+ *
+ * When your private Jitsi server is ready, replace `buildJitsiUrl` with a
+ * version that attaches a short-lived JWT token issued by the backend:
+ *
+ *   GET /api/v1/jitsi/token?classId=...&role=moderator   → { token }
+ *   URL: https://{JITSI_DOMAIN}/{room}?jwt={token}#config...
+ *
+ * The backend signs the JWT with the Jitsi APP_SECRET and sets:
+ *   { "context": { "user": { "moderator": true } }, "room": "...", ... }
+ *
+ * Until a private server is provisioned, this file works with meet.jit.si
+ * (no JWT required) while the role-mapping comments and helpers are already
+ * in place so the switchover is a one-file change.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -41,27 +67,70 @@ type Props = {
   role: "teacher" | "student";
 };
 
+// ── Configurable Jitsi domain ──────────────────────────────────────────────
+// Set NEXT_PUBLIC_JITSI_DOMAIN to your private/self-hosted Jitsi server for
+// production. Defaults to meet.jit.si for development / staging.
 const JITSI_DOMAIN = (process.env.NEXT_PUBLIC_JITSI_DOMAIN ?? "meet.jit.si").trim();
 
+// ── Room naming ────────────────────────────────────────────────────────────
+// Stable per class — all roles join the same room for a given classId.
+// Example: class "Class A" → "wearekidsclassa"
 function jitsiRoomName(classId: string): string {
   return `wearekids${classId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()}`;
 }
 
+// ── Role mapping ───────────────────────────────────────────────────────────
+// Maps LMS roles to Jitsi participant roles.
+// On a private Jitsi server with JWT auth, this value is embedded in the
+// signed token so the server enforces it. On public meet.jit.si it is
+// informational only (no server enforcement).
+//
+//   main_teacher      → "moderator"   full room control (mute, kick, lock)
+//   assistant_teacher → "participant" can present; no admin power
+//   student           → "participant" audio/video, no admin power
+type JitsiRole = "moderator" | "participant";
+
+function resolveJitsiRole(lmsRole: string): JitsiRole {
+  // main_teacher is the designated host / moderator.
+  // assistant_teacher and student are regular participants.
+  return lmsRole === "main_teacher" ? "moderator" : "participant";
+}
+
 /**
  * Builds the direct Jitsi room URL.
- * Config overrides are passed via the URL fragment so the room opens
- * without a prejoin page and with the user's LMS display name pre-filled.
+ *
+ * Config overrides travel via the URL fragment — no server-side rendering
+ * needed. The room opens without a prejoin page and with the user's LMS
+ * display name pre-filled.
+ *
+ * For private Jitsi with JWT: swap this function to call the backend for a
+ * signed token and append `?jwt={token}` before the fragment. The role
+ * parameter is already threaded through so the change is localised here.
  */
-function buildJitsiUrl(classId: string, displayName?: string): string {
+function buildJitsiUrl(classId: string, lmsRole: string, displayName?: string): string {
   const room = jitsiRoomName(classId);
+  const jitsiRole = resolveJitsiRole(lmsRole);
+
   const fragments: string[] = [
     "config.prejoinPageEnabled=false",
     "config.disableDeepLinking=true",
+    // Force Jitsi Video Bridge routing — required for groups > 2 and for
+    // moderator features (selective forwarding, mute-all, etc.)
     "config.p2p.enabled=false",
   ];
+
   if (displayName) {
     fragments.push(`userInfo.displayName=${encodeURIComponent(displayName)}`);
   }
+
+  // NOTE: On public meet.jit.si, jitsiRole has no server-side effect.
+  // On a private server with JWT, the moderator flag in the signed token
+  // grants host privileges — resolveJitsiRole() already maps this correctly.
+  // Log it so it is visible in dev tools for debugging.
+  if (typeof window !== "undefined") {
+    console.log(`[Jitsi] Opening room "${room}" as ${jitsiRole} (LMS role: ${lmsRole})`);
+  }
+
   return `https://${JITSI_DOMAIN}/${room}#${fragments.join("&")}`;
 }
 
@@ -230,7 +299,9 @@ export function LiveClassroomRoom({ classId, role }: Props) {
       if (cancelled) return;
 
       // ── Step 3: Build Jitsi URL and open it ────────────────────────────
-      const url = buildJitsiUrl(classId, currentUser.name);
+      // currentUser.role drives the moderator/participant split — see
+      // resolveJitsiRole() and the private Jitsi notes at the top of this file.
+      const url = buildJitsiUrl(classId, currentUser.role, currentUser.name);
       setJitsiUrl(url);
       setIsLoading(false);
       openJitsiRoom(url);
@@ -325,7 +396,11 @@ export function LiveClassroomRoom({ classId, role }: Props) {
               {session?.title ?? "Live Classroom"}
             </p>
             <p className="truncate text-xs text-slate-400">
-              {session ? `Hosted by ${session.teacher_name}` : isLoading ? "Setting up…" : ""}
+              {session
+                ? `Hosted by ${session.teacher_name}`
+                : isLoading
+                  ? "Setting up classroom…"
+                  : ""}
             </p>
           </div>
           {session && (
@@ -429,9 +504,16 @@ export function LiveClassroomRoom({ classId, role }: Props) {
                 {session?.title ?? "Live Classroom"}
               </h2>
               {session && (
-                <p className="mt-1 text-sm text-slate-400">
-                  Hosted by {session.teacher_name}
-                </p>
+                <>
+                  <p className="mt-1 text-sm text-slate-400">
+                    Hosted by {session.teacher_name}
+                  </p>
+                  {!isTeacher && (
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Main teacher controls the classroom
+                    </p>
+                  )}
+                </>
               )}
 
               {/* Room info */}
