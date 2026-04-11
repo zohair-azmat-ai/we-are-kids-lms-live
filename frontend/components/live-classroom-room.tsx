@@ -30,18 +30,16 @@
  *   assistant_teacher → "participant" (can present; no kick/mute power)
  *   student           → "participant" (view + audio/video only)
  *
- * When your private Jitsi server is ready, replace `buildJitsiUrl` with a
- * version that attaches a short-lived JWT token issued by the backend:
+ * JWT token flow (implemented):
+ *   1. After session fetch, call GET /api/v1/jitsi/token?class_id=...
+ *   2. Backend verifies LMS auth, resolves moderator flag, signs JWT
+ *   3. If token received → URL = https://{domain}/{room}?jwt={token}#config...
+ *   4. If token=null (JITSI_APP_SECRET not set) → plain URL (dev / public mode)
  *
- *   GET /api/v1/jitsi/token?classId=...&role=moderator   → { token }
- *   URL: https://{JITSI_DOMAIN}/{room}?jwt={token}#config...
- *
- * The backend signs the JWT with the Jitsi APP_SECRET and sets:
- *   { "context": { "user": { "moderator": true } }, "room": "...", ... }
- *
- * Until a private server is provisioned, this file works with meet.jit.si
- * (no JWT required) while the role-mapping comments and helpers are already
- * in place so the switchover is a one-file change.
+ * The backend sets in the JWT payload:
+ *   { "context": { "user": { "moderator": true/false } }, "room": "...", ... }
+ *   Signed HS256 with JITSI_APP_SECRET. Prosody/Jicofo on a private server
+ *   reads context.user.moderator and grants host privileges — no login prompt.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -51,11 +49,13 @@ import { useAuth } from "@/components/auth-provider";
 import {
   ApiError,
   endLiveClass,
+  fetchJitsiToken,
   getApiBaseUrl,
   joinClassPresence,
   leaveClassPresence,
   startRecordingSession,
   stopRecordingSession,
+  type JitsiTokenResponse,
   type LiveClassSession,
 } from "@/lib/api";
 import { getAccessToken, isMainTeacherRole, isTeacherRole } from "@/lib/demo-auth";
@@ -97,25 +97,29 @@ function resolveJitsiRole(lmsRole: string): JitsiRole {
 }
 
 /**
- * Builds the direct Jitsi room URL.
+ * Builds the final Jitsi room URL from a backend-issued token response.
  *
- * Config overrides travel via the URL fragment — no server-side rendering
- * needed. The room opens without a prejoin page and with the user's LMS
- * display name pre-filled.
+ * If token is present (private server with JWT auth):
+ *   https://{domain}/{room}?jwt={token}#config...
+ *   → Prosody/Jicofo reads context.user.moderator from the JWT and grants
+ *     host privileges to main_teacher automatically, no login prompt.
  *
- * For private Jitsi with JWT: swap this function to call the backend for a
- * signed token and append `?jwt={token}` before the fragment. The role
- * parameter is already threaded through so the change is localised here.
+ * If token is null (dev / public meet.jit.si, JITSI_APP_SECRET not set):
+ *   https://{domain}/{room}#config...
+ *   → Plain public room, no server-enforced moderator role.
+ *
+ * Config overrides in the fragment disable the prejoin page and force JVB
+ * routing (required for moderator mute-all, selective forwarding, etc.)
  */
-function buildJitsiUrl(classId: string, lmsRole: string, displayName?: string): string {
-  const room = jitsiRoomName(classId);
-  const jitsiRole = resolveJitsiRole(lmsRole);
+function buildJitsiUrlFromToken(
+  tokenResponse: JitsiTokenResponse,
+  displayName?: string,
+): string {
+  const { token, room, domain, is_moderator } = tokenResponse;
 
   const fragments: string[] = [
     "config.prejoinPageEnabled=false",
     "config.disableDeepLinking=true",
-    // Force Jitsi Video Bridge routing — required for groups > 2 and for
-    // moderator features (selective forwarding, mute-all, etc.)
     "config.p2p.enabled=false",
   ];
 
@@ -123,15 +127,21 @@ function buildJitsiUrl(classId: string, lmsRole: string, displayName?: string): 
     fragments.push(`userInfo.displayName=${encodeURIComponent(displayName)}`);
   }
 
-  // NOTE: On public meet.jit.si, jitsiRole has no server-side effect.
-  // On a private server with JWT, the moderator flag in the signed token
-  // grants host privileges — resolveJitsiRole() already maps this correctly.
-  // Log it so it is visible in dev tools for debugging.
+  const fragment = fragments.join("&");
+
   if (typeof window !== "undefined") {
-    console.log(`[Jitsi] Opening room "${room}" as ${jitsiRole} (LMS role: ${lmsRole})`);
+    console.log(
+      `[Jitsi] Opening room "${room}" on "${domain}" | moderator=${is_moderator} | jwt=${token ? "present" : "none (dev mode)"}`,
+    );
   }
 
-  return `https://${JITSI_DOMAIN}/${room}#${fragments.join("&")}`;
+  // JWT present → append as query param so private server can enforce roles
+  if (token) {
+    return `https://${domain}/${room}?jwt=${token}#${fragment}`;
+  }
+
+  // No JWT → plain URL (public meet.jit.si or private server without JWT auth)
+  return `https://${domain}/${room}#${fragment}`;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -148,6 +158,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   const [isRecording, setIsRecording] = useState(false);
   const [jitsiOpened, setJitsiOpened] = useState(false);
   const [jitsiUrl, setJitsiUrl] = useState("");
+  const [isModerator, setIsModerator] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
 
   const hasInitializedRef = useRef(false);
@@ -298,10 +309,37 @@ export function LiveClassroomRoom({ classId, role }: Props) {
 
       if (cancelled) return;
 
-      // ── Step 3: Build Jitsi URL and open it ────────────────────────────
-      // currentUser.role drives the moderator/participant split — see
-      // resolveJitsiRole() and the private Jitsi notes at the top of this file.
-      const url = buildJitsiUrl(classId, currentUser.role, currentUser.name);
+      // ── Step 3: Request Jitsi token from backend ───────────────────────
+      // The backend verifies LMS auth, resolves the moderator flag
+      // (main_teacher → moderator=true, everyone else → false), and signs
+      // a JWT with JITSI_APP_SECRET if configured.
+      //
+      // On a private Jitsi server: the signed JWT is appended as ?jwt=...
+      // so Prosody/Jicofo grants host privileges to main_teacher automatically.
+      //
+      // On public meet.jit.si / no JITSI_APP_SECRET: token=null is returned
+      // and the frontend falls back to a plain room URL (dev mode).
+      let jitsiTokenData: JitsiTokenResponse;
+      try {
+        jitsiTokenData = await fetchJitsiToken(classId);
+        console.log(
+          `[LiveClassroomRoom] Jitsi token fetched — moderator=${jitsiTokenData.is_moderator} jwt=${jitsiTokenData.token ? "yes" : "no"}`,
+        );
+      } catch (tokenErr) {
+        // Non-fatal: fall back to a plain public URL without JWT
+        console.warn("[LiveClassroomRoom] Jitsi token fetch failed, falling back to plain URL:", tokenErr);
+        jitsiTokenData = {
+          token: null,
+          room: jitsiRoomName(classId),
+          domain: JITSI_DOMAIN,
+          is_moderator: isMainTeacher,
+        };
+      }
+
+      if (cancelled) return;
+
+      setIsModerator(jitsiTokenData.is_moderator);
+      const url = buildJitsiUrlFromToken(jitsiTokenData, currentUser.name);
       setJitsiUrl(url);
       setIsLoading(false);
       openJitsiRoom(url);
@@ -516,8 +554,23 @@ export function LiveClassroomRoom({ classId, role }: Props) {
                 </>
               )}
 
+              {/* Role badge */}
+              <div className="mt-4 flex justify-center">
+                {isModerator ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-500/20 px-3 py-1 text-xs font-semibold text-violet-300">
+                    <span className="h-1.5 w-1.5 rounded-full bg-violet-400" />
+                    Moderator — host controls active
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-700 px-3 py-1 text-xs font-semibold text-slate-400">
+                    <span className="h-1.5 w-1.5 rounded-full bg-slate-500" />
+                    Participant
+                  </span>
+                )}
+              </div>
+
               {/* Room info */}
-              <div className="mt-5 rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-3 text-left">
+              <div className="mt-4 rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-3 text-left">
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                   Room
                 </p>

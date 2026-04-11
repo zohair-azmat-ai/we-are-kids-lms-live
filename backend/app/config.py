@@ -62,3 +62,12 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5").strip()
 CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "").strip()
 CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY", "").strip()
 CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "").strip()
+# Jitsi Meet — private/self-hosted deployment
+# Set JITSI_DOMAIN to your private server (e.g. jitsi.yourdomain.com).
+# Set JITSI_APP_ID + JITSI_APP_SECRET to enable signed JWT tokens so
+# main_teacher automatically receives moderator (host) privileges.
+# If not set, the backend returns token=null and the frontend opens a
+# plain public room on meet.jit.si (no enforced moderator role).
+JITSI_DOMAIN = os.getenv("JITSI_DOMAIN", "meet.jit.si").strip()
+JITSI_APP_ID = os.getenv("JITSI_APP_ID", "").strip()
+JITSI_APP_SECRET = os.getenv("JITSI_APP_SECRET", "").strip()

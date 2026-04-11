@@ -58,6 +58,23 @@ export type LiveKitTokenResponse = {
   participant_name: string;
 };
 
+/**
+ * Response from GET /api/v1/jitsi/token
+ *
+ * token        Signed HS256 JWT. Append as ?jwt={token} to the Jitsi room URL.
+ *              null when JITSI_APP_SECRET is not configured on the server —
+ *              frontend falls back to a plain public-room URL.
+ * room         Stable room name: wearekids{classId-alphanum}
+ * domain       Jitsi server domain (private server or meet.jit.si for dev)
+ * is_moderator True for main_teacher — enforced as host on a private server.
+ */
+export type JitsiTokenResponse = {
+  token: string | null;
+  room: string;
+  domain: string;
+  is_moderator: boolean;
+};
+
 export type RecordingItem = {
   recording_id: string;
   class_id: string;
@@ -634,6 +651,25 @@ export async function requestLiveKitToken(params: {
       }),
     },
     "Unable to prepare your live classroom connection.",
+  );
+}
+
+/**
+ * Fetch a signed Jitsi JWT from the backend.
+ *
+ * The token encodes the user's role (moderator for main_teacher, participant
+ * for everyone else) and is signed with JITSI_APP_SECRET on the server.
+ * Append it to the Jitsi room URL as ?jwt={token} so the private server
+ * can enforce host privileges without a manual login prompt.
+ *
+ * Returns token=null when the backend is not configured with JITSI_APP_SECRET
+ * (dev / public meet.jit.si mode) — the frontend falls back to a plain URL.
+ */
+export async function fetchJitsiToken(classId: string): Promise<JitsiTokenResponse> {
+  return requestJson<JitsiTokenResponse>(
+    `/api/v1/jitsi/token?class_id=${encodeURIComponent(classId)}`,
+    { method: "GET" },
+    "Unable to prepare classroom token.",
   );
 }
 
