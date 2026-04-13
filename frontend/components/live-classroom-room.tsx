@@ -262,6 +262,18 @@ export function LiveClassroomRoom({ classId, role }: Props) {
       if (cancelled) return;
 
       const url = buildJitsiUrl(classId, currentUser.name);
+
+      // On mobile, iframe-embedded Jitsi fails to connect — redirect instead.
+      const isMobile =
+        typeof window !== "undefined" &&
+        /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+      if (isMobile) {
+        console.log("[LiveClassroomRoom] Mobile detected — redirecting to Jitsi:", url);
+        window.location.href = url;
+        return; // Don't set loading=false; the page will navigate away
+      }
+
       console.log("[LiveClassroomRoom] Setting iframe src:", url);
       setJitsiUrl(url);
       setIsLoading(false);
@@ -459,8 +471,8 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           </div>
         )}
 
-        {/* Jitsi iframe — full area, no clipping */}
-        {jitsiUrl && (
+        {/* Jitsi iframe — desktop only; mobile uses window.location.href redirect */}
+        {jitsiUrl && typeof window !== "undefined" && !/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) && (
           <iframe
             src={jitsiUrl}
             allow="camera; microphone; display-capture; autoplay; clipboard-write"
