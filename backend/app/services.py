@@ -44,7 +44,7 @@ PLAN_FEATURES: dict[BillingPlan, dict[str, object]] = {
         "audience": "Small school",
         "highlights": [
             "Core nursery LMS dashboard",
-            "LiveKit classroom sessions",
+            "Jitsi Meet classroom sessions",
             "Basic recordings access",
         ],
     },

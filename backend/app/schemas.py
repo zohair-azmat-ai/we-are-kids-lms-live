@@ -152,20 +152,6 @@ class SuccessResponse(BaseModel):
     message: str
 
 
-class LiveKitTokenRequest(BaseModel):
-    room_name: str
-    participant_name: str
-    role: ClassroomRole
-    participant_email: str | None = None
-
-
-class LiveKitTokenResponse(BaseModel):
-    token: str
-    url: str
-    room_name: str
-    participant_name: str
-
-
 class ClassroomPresenceRequest(BaseModel):
     role: ClassroomRole
     participant_email: str | None = None

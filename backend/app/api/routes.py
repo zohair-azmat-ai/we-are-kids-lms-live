@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 import stripe
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
-from livekit.api import AccessToken, VideoGrants
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -23,9 +22,6 @@ from app.config import (
     JITSI_APP_ID,
     JITSI_APP_SECRET,
     JITSI_DOMAIN,
-    LIVEKIT_API_KEY,
-    LIVEKIT_API_SECRET,
-    LIVEKIT_URL,
     OPENAI_API_KEY,
     STRIPE_PRICE_PREMIUM,
     STRIPE_PRICE_STANDARD,
@@ -62,8 +58,6 @@ from app.schemas import (
     ClassUpdateRequest,
     EndClassRequest,
     LiveClass,
-    LiveKitTokenRequest,
-    LiveKitTokenResponse,
     LiveSessionSummary,
     RecordingDeleteResponse,
     RecordingItem,
@@ -148,14 +142,6 @@ STRIPE_PRICE_TO_PLAN = {
 
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
-
-
-def require_livekit_config() -> None:
-    if not LIVEKIT_URL or not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET:
-        raise HTTPException(
-            status_code=503,
-            detail="Live classroom service is not configured yet. Please add LiveKit environment variables.",
-        )
 
 
 def require_stripe_config() -> None:
@@ -353,7 +339,7 @@ def get_test_payload() -> dict:
             "admin",
             "live-classes-ready",
             "postgres-ready",
-            "livekit-ready",
+            "jitsi-ready",
             "stripe-billing-ready",
         ],
     }
@@ -601,48 +587,6 @@ def get_class_session(class_id: str, current_user: User = Depends(get_current_us
 
     return session
 
-
-@api_router.post("/livekit/token", response_model=LiveKitTokenResponse)
-def create_livekit_token(
-    payload: LiveKitTokenRequest,
-    current_user: User = Depends(get_current_user),
-) -> LiveKitTokenResponse:
-    require_livekit_config()
-    if payload.role != current_user.role:
-        raise HTTPException(status_code=403, detail="Classroom role mismatch.")
-
-    with SessionLocal() as db:
-        classroom, user, _ = validate_classroom_access(
-            db,
-            class_id=payload.room_name,
-            role=payload.role,
-            participant_email=current_user.email,
-            participant_name=current_user.name,
-            allow_teacher_start=payload.role == "teacher",
-        )
-
-        token = (
-            AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-            .with_identity(user.email)
-            .with_name(user.name)
-            .with_grants(
-                VideoGrants(
-                    room_join=True,
-                    room=classroom.id,
-                    can_publish=True,
-                    can_subscribe=True,
-                    can_publish_data=True,
-                )
-            )
-            .to_jwt()
-        )
-
-        return LiveKitTokenResponse(
-            token=token,
-            url=LIVEKIT_URL,
-            room_name=classroom.id,
-            participant_name=user.name,
-        )
 
 
 @api_router.get("/jitsi/token", response_model=JitsiTokenResponse)

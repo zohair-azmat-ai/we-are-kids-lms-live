@@ -25,7 +25,7 @@ export function AdminDemoHelpCard() {
             Best Features
           </p>
           <p className="mt-3 text-sm leading-7 text-slate-700">
-            Show billing limits, AI insights, LiveKit classroom joining, recording upload flow, and the floating AI assistant in one pass.
+            Show billing limits, AI insights, Jitsi classroom joining, recording upload flow, and the floating AI assistant in one pass.
           </p>
         </article>
 

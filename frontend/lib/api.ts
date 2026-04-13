@@ -4,10 +4,6 @@ const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "")
   .trim()
   .replace(/\/$/, "");
 
-const LIVEKIT_URL = (process.env.NEXT_PUBLIC_LIVEKIT_URL ?? "")
-  .trim()
-  .replace(/\/$/, "");
-
 const APP_URL = (process.env.NEXT_PUBLIC_APP_URL ?? "")
   .trim()
   .replace(/\/$/, "");
@@ -18,7 +14,7 @@ export type HealthResponse = {
   version: string;
   environment?: string;
   port?: number;
-  livekit_configured?: boolean;
+  jitsi_configured?: boolean;
   billing_configured?: boolean;
   ai_configured?: boolean;
 };
@@ -48,15 +44,8 @@ export type LiveClassSession = {
   started_at?: string | null;
 };
 
-/** The two LiveKit-level roles — teacher-group users all get "teacher" tokens. */
-export type LiveKitRole = "teacher" | "student";
-
-export type LiveKitTokenResponse = {
-  token: string;
-  url: string;
-  room_name: string;
-  participant_name: string;
-};
+/** Classroom participant role — used for presence join/leave. */
+export type ClassroomParticipantRole = "teacher" | "student";
 
 /**
  * Response from GET /api/v1/jitsi/token
@@ -454,10 +443,6 @@ export function getAppUrl(): string {
   return APP_URL;
 }
 
-export function getResolvedLiveKitUrl(urlFromBackend?: string): string {
-  return LIVEKIT_URL || (urlFromBackend ?? "").trim();
-}
-
 export function getAssetUrl(path: string): string {
   if (!API_BASE_URL) {
     throw new Error(
@@ -570,7 +555,7 @@ export async function endLiveClass(
 
 export async function joinClassPresence(params: {
   classId: string;
-  role: LiveKitRole;
+  role: ClassroomParticipantRole;
   participantEmail: string;
   participantName: string;
 }): Promise<LiveClassSession> {
@@ -595,7 +580,7 @@ export async function joinClassPresence(params: {
 
 export async function leaveClassPresence(params: {
   classId: string;
-  role: LiveKitRole;
+  role: ClassroomParticipantRole;
   participantEmail: string;
   participantName: string;
 }): Promise<LiveClassSession> {
@@ -627,30 +612,6 @@ export async function fetchClassSession(
     15_000,
     { cache: "no-store" },
     "Class session request failed.",
-  );
-}
-
-export async function requestLiveKitToken(params: {
-  roomName: string;
-  participantName: string;
-  participantEmail: string;
-  role: LiveKitRole;
-}): Promise<LiveKitTokenResponse> {
-  return requestJson<LiveKitTokenResponse>(
-    "/api/v1/livekit/token",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        room_name: params.roomName,
-        participant_name: params.participantName,
-        participant_email: params.participantEmail,
-        role: params.role,
-      }),
-    },
-    "Unable to prepare your live classroom connection.",
   );
 }
 

@@ -38,7 +38,7 @@ const publicPlans: BillingPlanInfo[] = [
       audience: "Small school",
       highlights: [
         "Core nursery LMS dashboard",
-        "LiveKit classroom sessions",
+        "Jitsi Meet classroom sessions",
         "Basic recordings access",
       ],
     },

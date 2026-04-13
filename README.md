@@ -14,7 +14,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
-[![LiveKit](https://img.shields.io/badge/LiveKit-E11D48?style=for-the-badge&logo=webrtc&logoColor=white)](https://livekit.io)
+[![Jitsi Meet](https://img.shields.io/badge/Jitsi_Meet-97979A?style=for-the-badge&logo=jitsi&logoColor=white)](https://meet.jit.si)
 [![Stripe](https://img.shields.io/badge/Stripe-635BFF?style=for-the-badge&logo=stripe&logoColor=white)](https://stripe.com)
 [![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=for-the-badge&logo=openai&logoColor=white)](https://openai.com)
 [![Neon](https://img.shields.io/badge/Neon_Postgres-00E5A0?style=for-the-badge&logo=postgresql&logoColor=white)](https://neon.tech)
@@ -49,11 +49,9 @@ Explore the full AI-powered LMS with live classrooms, SaaS billing, and analytic
 
 ## 💡 Why This Project Stands Out
 
-> Every feature is implemented end-to-end. No mocks. No placeholders. No tutorials.
-
 | | What's Real |
 |:---:|:---|
-| 🎥 | **Live WebRTC classrooms** — multi-participant video via LiveKit, not an iframe |
+| 🎥 | **Live video classrooms** — real-time calls via Jitsi Meet WebRTC |
 | 💳 | **SaaS billing** — Stripe subscriptions with plan limits enforced at the API layer |
 | 🤖 | **AI assistant + insights** — OpenAI-powered chat and classroom recommendations |
 | 🔐 | **JWT auth** — bcrypt passwords, role-protected routes, token-based sessions |
@@ -72,14 +70,25 @@ Explore the full AI-powered LMS with live classrooms, SaaS billing, and analytic
 
 <br />
 
-**Real-time video classrooms powered by LiveKit WebRTC — not a demo.**
+**Real-time video classrooms powered by Jitsi Meet WebRTC.**
 
 | Step | |
 |:---:|:---|
-| **1** | Teacher clicks **Start Live Session** — a LiveKit room is created instantly |
+| **1** | Teacher clicks **Start Class** — LMS marks the session as LIVE |
 | **2** | Students see the class go live and join with a single click |
-| **3** | All participants appear in a real-time video grid |
-| **4** | Session ends → recording uploaded → available for 5 days |
+| **3** | Desktop: Jitsi loads inside the LMS UI (iframe) |
+| **4** | Mobile: Jitsi opens full-screen (redirect — iframe is not stable on mobile) |
+| **5** | Teacher becomes moderator (may require Google login on public meet.jit.si) |
+| **6** | Session ends → recording available for playback |
+
+---
+
+## ⚠️ Jitsi Limitation
+
+- Free public Jitsi (`meet.jit.si`) may show a 5-minute demo warning on large calls
+- Teacher may need to log in with Google to receive moderator (host) privileges
+- Mobile devices are redirected to the Jitsi app instead of using an embedded iframe
+- For full moderator control without login prompts, a private self-hosted Jitsi server with JWT enabled is needed (the backend endpoint `GET /api/v1/jitsi/token` is already implemented)
 
 ---
 
@@ -91,9 +100,10 @@ Explore the full AI-powered LMS with live classrooms, SaaS billing, and analytic
 - Graceful fallback if no OpenAI key is configured
 
 ### 🎥 Live Classes
-- Teacher-initiated LiveKit video rooms
-- Secure student join via session token
-- Multi-participant real-time video grid
+- Teacher-initiated Jitsi Meet video rooms
+- Students join with a single click from their dashboard
+- Desktop: embedded iframe inside LMS UI
+- Mobile: full-screen redirect for stable call experience
 - Post-session recording with 5-day auto-expiry
 
 ### 🏫 LMS Core
@@ -164,14 +174,13 @@ flowchart LR
     subgraph BE["FastAPI · Hugging Face Spaces"]
         JWT["JWT Auth"]
         API["REST API"]
-        LK_SVC["LiveKit Service"]
         STR_SVC["Stripe Service"]
         AI_SVC["AI Service"]
     end
 
     subgraph Infra
         DB[("🐘 Neon Postgres")]
-        LK[("🎥 LiveKit.io")]
+        JITSI[("🎥 Jitsi Meet")]
         STRIPE[("💳 Stripe")]
         OPENAI[("🤖 OpenAI")]
     end
@@ -179,7 +188,7 @@ flowchart LR
     A & T & S --> LOGIN --> JWT --> API
     API --> DB
     DASH --> API
-    LIVE --> LK_SVC --> LK
+    LIVE --> JITSI
     AI_UI --> AI_SVC --> OPENAI
     DASH --> STR_SVC --> STRIPE
 ```
@@ -191,7 +200,7 @@ flowchart LR
 | Metric | Detail |
 |:---|:---|
 | User Roles | Admin · Teacher · Student |
-| Live Video | LiveKit WebRTC — multi-participant |
+| Live Video | Jitsi Meet (WebRTC, public) |
 | Authentication | JWT + bcrypt |
 | Database | Neon Postgres · SQLAlchemy 2.0 |
 | Billing | Stripe — tiered plan enforcement |
@@ -210,7 +219,7 @@ flowchart LR
 | Backend | FastAPI 0.115 · Uvicorn |
 | Database | Neon Postgres · SQLAlchemy 2.0 |
 | Auth | JWT · python-jose · bcrypt |
-| Live Video | LiveKit Client 2.15.6 · livekit-api 0.8.2 |
+| Live Video | Jitsi Meet (meet.jit.si) — WebRTC |
 | Billing | Stripe 12.0 |
 | AI | OpenAI via ai_service.py |
 | Deployment | Vercel + Hugging Face Spaces (Docker) |
@@ -245,13 +254,17 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 **Backend** `.env`
 ```env
 DATABASE_URL=postgresql+psycopg2://user:password@your-neon-host/dbname
-LIVEKIT_API_KEY=your_key
-LIVEKIT_API_SECRET=your_secret
-LIVEKIT_URL=wss://your-server.livekit.cloud
 STRIPE_SECRET_KEY=your_stripe_key
 OPENAI_API_KEY=your_openai_key
 SECRET_KEY=your_jwt_secret
 CORS_ORIGINS=http://localhost:3000
+```
+
+Optional — for private self-hosted Jitsi with enforced moderator roles:
+```env
+JITSI_DOMAIN=jitsi.yourdomain.com
+JITSI_APP_ID=your_app_id
+JITSI_APP_SECRET=your_app_secret
 ```
 
 ---
@@ -275,6 +288,7 @@ CORS_ORIGINS=http://localhost:3000
 |:---|:---|
 | 🔴 High | Attendance tracking per live session |
 | 🔴 High | Cloud recording storage (S3 / R2) |
+| 🔴 High | Private self-hosted Jitsi for full moderator control |
 | 🟡 Medium | Parent portal with progress reports |
 | 🟡 Medium | Real-time notifications |
 | 🟡 Medium | AI auto-summaries for completed sessions |
