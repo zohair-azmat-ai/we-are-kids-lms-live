@@ -201,35 +201,6 @@ def is_student_enrolled_in_class(db: Session, class_id: str, student_id: str) ->
     return enrollment is not None
 
 
-# ── In-memory Google Meet link store ──────────────────────────────────────────
-import base64 as _base64
-import hashlib as _hashlib
-import hmac as _hmac
-import secrets as _secrets
-import struct as _struct
-import time as _time
-from zlib import crc32 as _crc32
-
-
-def _pack_uint16(x: int) -> bytes:
-    return _struct.pack("<H", x)
-
-
-def _pack_uint32(x: int) -> bytes:
-    return _struct.pack("<I", x)
-
-
-def _pack_string(s: bytes) -> bytes:
-    return _pack_uint16(len(s)) + s
-
-
-def _pack_map_uint32(m: dict) -> bytes:
-    result = _pack_uint16(len(m))
-    for k in sorted(m):
-        result += _pack_uint16(k) + _pack_uint32(m[k])
-    return result
-
-
 def generate_agora_rtc_token(
     app_id: str,
     app_certificate: str,
@@ -238,31 +209,63 @@ def generate_agora_rtc_token(
     expire_seconds: int = 3600,
 ) -> str:
     """
-    Agora AccessToken v006 — matches the official Agora dynamic key algorithm.
+    Official Agora AccessToken2 (v007) for RTC publisher role.
+    Mirrors github.com/AgoraIO/Tools DynamicKey/AgoraDynamicKey/python3
+    (AccessToken2.py + RtcTokenBuilder2.py).
 
-    uid=0 is the Agora convention for "any UID"; the official implementation uses
-    an empty string as the account contribution in both the HMAC message and the
-    CRC calculation.  Any non-zero uid is encoded as its decimal string.
+    Role = publisher: JoinChannel + PublishAudio + PublishVideo + PublishData.
+    uid = 0  →  "" (Agora wildcard: any numeric UID accepted by the server).
     """
-    # Official Agora convention: uid=0 → account="" (wildcard); else str(uid)
-    uid_str = "" if uid == 0 else str(uid)
+    import base64 as _b64
+    import hashlib as _hashlib
+    import hmac as _hmac
+    import random as _random
+    import struct as _struct
+    import time as _time
 
-    ts = int(_time.time())
-    salt = _secrets.randbelow(100_000) + 1
-    expire_ts = ts + expire_seconds
+    # ── pack helpers ──────────────────────────────────────────────────────
+    def pu16(v: int) -> bytes: return _struct.pack("<H", v)
+    def pu32(v: int) -> bytes: return _struct.pack("<I", v)
+    def pstr(b: bytes) -> bytes: return pu16(len(b)) + b
+    def pmap(m: dict) -> bytes:
+        r = pu16(len(m))
+        for k in sorted(m):
+            r += pu16(k) + pu32(m[k])
+        return r
 
-    # Privilege keys: 1=JoinChannel 2=PublishAudio 3=PublishVideo 4=PublishData
+    # ── inputs ────────────────────────────────────────────────────────────
+    uid_str   = "" if uid == 0 else str(uid)
+    issue_ts  = int(_time.time())
+    expire_ts = issue_ts + expire_seconds   # absolute Unix timestamp
+    salt      = _random.getrandbits(32)
+
+    # ── RTC service (service type = 1) ────────────────────────────────────
+    # Privilege value = absolute Unix timestamp when privilege expires.
+    # 1=JoinChannel  2=PublishAudio  3=PublishVideo  4=PublishData
     privileges = {1: expire_ts, 2: expire_ts, 3: expire_ts, 4: expire_ts}
 
-    msg = _pack_uint32(ts) + _pack_uint32(salt) + _pack_map_uint32(privileges)
-    val = app_id.encode("utf-8") + channel_name.encode("utf-8") + uid_str.encode("utf-8") + msg
-    sig = _hmac.new(app_certificate.encode("utf-8"), val, _hashlib.sha256).digest()
+    service = (
+        pu16(1) +                                 # service type: RTC
+        pstr(channel_name.encode("utf-8")) +      # channel name
+        pstr(uid_str.encode("utf-8")) +           # uid string ("" for wildcard)
+        pmap(privileges)                          # privilege map
+    )
 
-    crc_ch  = _crc32(channel_name.encode("utf-8")) & 0xFFFF_FFFF
-    crc_uid = _crc32(uid_str.encode("utf-8"))       & 0xFFFF_FFFF
+    # ── token body: issue_ts | expire_ts | salt | num_services | service ──
+    body = pu32(issue_ts) + pu32(expire_ts) + pu32(salt) + pu16(1) + service
 
-    content = _pack_string(sig) + _pack_uint32(crc_ch) + _pack_uint32(crc_uid) + _pack_string(msg)
-    return "006" + app_id + _base64.b64encode(content).decode("utf-8")
+    # ── 2-step HMAC-SHA256 signing ────────────────────────────────────────
+    # Step 1 — derive signing key from certificate + (issue_ts ‖ salt)
+    signing_key = _hmac.new(
+        app_certificate.encode("utf-8"),
+        pu32(issue_ts) + pu32(salt),
+        _hashlib.sha256,
+    ).digest()
+    # Step 2 — sign the body with the derived key
+    sig = _hmac.new(signing_key, body, _hashlib.sha256).digest()
+
+    # ── assemble: "007" + app_id(32 hex chars) + base64(pstr(sig) + body) ─
+    return "007" + app_id + _b64.b64encode(pstr(sig) + body).decode("utf-8")
 
 
 def build_live_class_response(classroom: Classroom, session: LiveSession | None) -> LiveClass:
