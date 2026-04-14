@@ -42,6 +42,7 @@ export type LiveClassSession = {
   status: "live" | "scheduled" | "ended";
   participants_count: number;
   started_at?: string | null;
+  meet_link?: string | null;
 };
 
 /** Classroom participant role — used for presence join/leave. */
@@ -632,6 +633,21 @@ export async function fetchJitsiToken(classId: string): Promise<JitsiTokenRespon
     { method: "GET" },
     "Unable to prepare classroom token.",
   );
+}
+
+/** Save the Google Meet link for a class so students can join it. */
+export async function saveMeetLink(classId: string, meetLink: string): Promise<void> {
+  await requestJson<{ success: boolean }>(
+    `/api/v1/classes/${encodeURIComponent(classId)}/meet-link`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ meet_link: meetLink }),
+    },
+    "Unable to save meeting link.",
+  );
+  invalidateCacheByPrefix(`class-session:${classId}`);
+  invalidateCacheByPrefix("live-classes");
 }
 
 export async function startRecordingSession(params: {

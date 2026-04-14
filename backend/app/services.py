@@ -201,9 +201,25 @@ def is_student_enrolled_in_class(db: Session, class_id: str, student_id: str) ->
     return enrollment is not None
 
 
+# ── In-memory Google Meet link store ──────────────────────────────────────────
+# Keyed by class_id.  Cleared on server restart — acceptable for live sessions
+# that typically last < 2 hours.  No DB migration required.
+_meet_links: dict[str, str] = {}
+
+
+def set_meet_link(class_id: str, meet_link: str) -> None:
+    _meet_links[class_id] = meet_link.strip()
+
+
+def get_meet_link(class_id: str) -> str | None:
+    return _meet_links.get(class_id)
+
+
 def build_live_class_response(classroom: Classroom, session: LiveSession | None) -> LiveClass:
     if not classroom.teacher:
         raise HTTPException(status_code=404, detail="Teacher not found for class.")
+
+    meet_link = _meet_links.get(classroom.id)
 
     if session:
         return LiveClass(
@@ -214,6 +230,7 @@ def build_live_class_response(classroom: Classroom, session: LiveSession | None)
             status=session.status,
             participants_count=session.participants_count,
             started_at=session.started_at,
+            meet_link=meet_link,
         )
 
     return LiveClass(
@@ -224,6 +241,7 @@ def build_live_class_response(classroom: Classroom, session: LiveSession | None)
         status="scheduled",
         participants_count=0,
         started_at=None,
+        meet_link=meet_link,
     )
 
 

@@ -59,6 +59,7 @@ from app.schemas import (
     EndClassRequest,
     LiveClass,
     LiveSessionSummary,
+    MeetLinkRequest,
     RecordingDeleteResponse,
     RecordingItem,
     RecordingStartRequest,
@@ -114,6 +115,7 @@ from app.services import (
     normalize_email,
     record_attendance_join,
     require_admin_user,
+    set_meet_link,
     require_plan_capacity,
     serialize_recording,
     update_billing_account_from_subscription,
@@ -587,6 +589,22 @@ def get_class_session(class_id: str, current_user: User = Depends(get_current_us
 
     return session
 
+
+@api_router.put("/classes/{class_id}/meet-link")
+def save_meet_link(
+    class_id: str,
+    body: MeetLinkRequest,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Teacher saves the Google Meet link for this class session.
+    Stored in memory — cleared on server restart (acceptable for a live session).
+    """
+    if current_user.role not in {"teacher", "main_teacher", "assistant_teacher"}:
+        raise HTTPException(status_code=403, detail="Only teachers can set the meeting link.")
+    if not body.meet_link.startswith("https://"):
+        raise HTTPException(status_code=400, detail="Meeting link must be a valid HTTPS URL.")
+    set_meet_link(class_id, body.meet_link)
+    return {"success": True, "meet_link": body.meet_link}
 
 
 @api_router.get("/jitsi/token", response_model=JitsiTokenResponse)

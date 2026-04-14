@@ -19,6 +19,11 @@ class LiveClass(BaseModel):
     status: SessionStatus
     participants_count: int
     started_at: datetime | None = None
+    meet_link: str | None = None
+
+
+class MeetLinkRequest(BaseModel):
+    meet_link: str
 
 
 class StartClassRequest(BaseModel):

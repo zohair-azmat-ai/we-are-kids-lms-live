@@ -1,26 +1,21 @@
 "use client";
 
 /**
- * LiveClassroomRoom — split Jitsi flow
+ * LiveClassroomRoom — Google Meet external video provider
  *
  * Teacher flow:
  *   1. Fetch LMS session + register presence
- *   2. Build the shared room URL
- *   3. window.open(url, "_blank") — opens Jitsi in a NEW TAB outside the iframe
- *      so the teacher can log in with Google and become moderator reliably.
- *   4. LMS stays open: teacher sees a control panel with recording + End Class.
- *      An "Open Classroom in Jitsi" button lets them reopen the tab if needed.
+ *   2. "Start Class in Google Meet" button → window.open("https://meet.google.com/new", "_blank")
+ *   3. Teacher pastes the generated Meet link into an input field
+ *   4. Link is saved to the backend via PUT /api/v1/classes/{class_id}/meet-link
+ *   5. Students polling the live class endpoint automatically receive the link
+ *   6. LMS control panel stays open: End Class / Leave / recording controls
  *
  * Student flow:
- *   1-2. Same session fetch + presence
- *   3. Desktop: Jitsi embedded in a full-page iframe
- *      Mobile:  window.location.href redirect (iframe unstable on mobile)
- *
- * Room naming:
- *   wearekids-{classId-alphanum} — stable for the lifetime of the class so
- *   every participant joins the exact same room regardless of when they arrive.
- *   No timestamp suffix: teacher must be present first to unblock the room;
- *   the stable name ensures students find the same room the teacher opened.
+ *   1. Fetch LMS session + register presence
+ *   2. If meet_link is set → "Join Live Class" button → window.open(meet_link, "_blank")
+ *   3. If meet_link is not yet set → "Waiting for teacher to share the meeting link…"
+ *   4. Poll every 10 s — joins automatically once link appears
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -33,6 +28,7 @@ import {
   getApiBaseUrl,
   joinClassPresence,
   leaveClassPresence,
+  saveMeetLink,
   startRecordingSession,
   stopRecordingSession,
   type LiveClassSession,
@@ -46,31 +42,6 @@ type Props = {
   role: "teacher" | "student";
 };
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/** Stable room name — same value for every participant in this class. */
-function jitsiRoomName(classId: string): string {
-  return `wearekids-${classId.replace(/[^a-zA-Z0-9]/g, "")}`;
-}
-
-/**
- * Build a fully-public meet.jit.si URL — no JWT, no login required.
- *
- * prejoinPageEnabled=false   — skip the pre-join lobby
- * requireDisplayName=false   — skip the "enter your name" prompt
- * userInfo.displayName       — pre-fill name so Jitsi doesn't ask
- */
-function buildJitsiUrl(roomName: string, displayName?: string): string {
-  const fragments = [
-    "config.prejoinPageEnabled=false",
-    "config.requireDisplayName=false",
-  ];
-  if (displayName) {
-    fragments.push(`userInfo.displayName=${encodeURIComponent(displayName)}`);
-  }
-  return `https://meet.jit.si/${roomName}#${fragments.join("&")}`;
-}
-
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function LiveClassroomRoom({ classId, role }: Props) {
@@ -83,11 +54,12 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   const [canRetry, setCanRetry] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  // jitsiUrl is set for both teacher (for the "open again" button) and student (for iframe src)
-  const [jitsiUrl, setJitsiUrl] = useState("");
-  // true when getUserMedia was denied — teacher can still open Jitsi with a warning
-  const [mediaBlocked, setMediaBlocked] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
+
+  // Teacher: the link they type before saving
+  const [linkInput, setLinkInput] = useState("");
+  const [isSavingLink, setIsSavingLink] = useState(false);
+  const [linkSaveError, setLinkSaveError] = useState("");
 
   const hasInitializedRef = useRef(false);
   const isFetchingClassRef = useRef(false);
@@ -127,8 +99,6 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     setError("");
     setCanRetry(false);
     setSessionExpired(false);
-    setJitsiUrl("");
-    setMediaBlocked(false);
     setIsLoading(true);
     setRetryKey((k) => k + 1);
   }
@@ -144,7 +114,6 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     let cancelled = false;
 
     async function initialize() {
-      // ── Guard: LMS token must exist ────────────────────────────────────
       const token = getAccessToken();
       if (!token) {
         setSessionExpired(true);
@@ -153,11 +122,9 @@ export function LiveClassroomRoom({ classId, role }: Props) {
         return;
       }
 
-      // ── Guard: prevent concurrent fetch ────────────────────────────────
       if (isFetchingClassRef.current) return;
       isFetchingClassRef.current = true;
 
-      // ── Step 1: Fetch class session ────────────────────────────────────
       const apiBase = getApiBaseUrl();
 
       async function doFetchSession(): Promise<LiveClassSession> {
@@ -206,7 +173,6 @@ export function LiveClassroomRoom({ classId, role }: Props) {
       isFetchingClassRef.current = false;
       if (cancelled) return;
 
-      // Students can only join a live session
       if (!isTeacher && classSession.status !== "live") {
         setError("This class is not live yet. Please wait for your teacher to start.");
         setIsLoading(false);
@@ -215,7 +181,6 @@ export function LiveClassroomRoom({ classId, role }: Props) {
 
       setSession(classSession);
 
-      // ── Step 2: Register LMS presence ──────────────────────────────────
       try {
         await joinClassPresence({
           classId,
@@ -227,77 +192,9 @@ export function LiveClassroomRoom({ classId, role }: Props) {
       } catch { /* non-fatal */ }
 
       if (cancelled) return;
-
-      // ── Step 3: Build shared room URL ──────────────────────────────────
-      const roomName = jitsiRoomName(classId);
-      const url = buildJitsiUrl(roomName, currentUser.name);
-      console.log("[Jitsi] Room URL:", url, "| teacher:", isTeacher);
-
-      // ── Teacher: request media permissions, then open in a new tab ───────
-      if (isTeacher) {
-        // Ask the browser for camera + mic before opening the Jitsi tab.
-        // This surfaces the permission prompt in the LMS context first so the
-        // teacher understands what to allow, and confirms their hardware works.
-        // NOTE: Permissions are per-origin — granting here does not auto-grant
-        // on meet.jit.si, but the browser will remember the user allowed it and
-        // the prompt on Jitsi is usually pre-filled / auto-accepted.
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-          // Release the tracks immediately — Jitsi will re-acquire them in its tab.
-          stream.getTracks().forEach((t) => t.stop());
-          console.log("[LiveClassroomRoom] Media permissions granted — opening Jitsi in new tab:", url);
-          setMediaBlocked(false);
-        } catch (mediaErr) {
-          console.warn("[LiveClassroomRoom] Media permission denied:", mediaErr);
-          // Don't block the teacher — they can still open Jitsi and deal with
-          // permissions there.  We just surface a warning in the control panel.
-          setMediaBlocked(true);
-        }
-
-        if (cancelled) return;
-
-        // Open the Jitsi room in a new browser tab.
-        // The teacher becomes moderator on public meet.jit.si by being first to
-        // arrive — this only works reliably outside an iframe, hence the new tab.
-        console.log("[LiveClassroomRoom] Teacher flow: new-tab | URL:", url);
-        window.open(url, "_blank");
-        setJitsiUrl(url); // stored so "Open Again" button works
-        setIsLoading(false);
-
-        // Poll to redirect back to dashboard when the class ends
-        pollRef.current = setInterval(async () => {
-          try {
-            const resp = await fetch(`${apiBase}/api/v1/classes/${classId}`, {
-              headers: { Authorization: `Bearer ${getAccessToken()}` },
-              cache: "no-store",
-            });
-            if (resp.ok) {
-              const updated = (await resp.json()) as LiveClassSession;
-              if (updated.status === "ended") {
-                void cleanup();
-                router.push(dashboardPath);
-              }
-            }
-          } catch { /* ignore */ }
-        }, 15_000);
-        return;
-      }
-
-      // ── Student: iframe on desktop, redirect on mobile ─────────────────
-      const isMobile =
-        typeof window !== "undefined" &&
-        /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
-      if (isMobile) {
-        console.log("[LiveClassroomRoom] Mobile student — redirecting:", url);
-        window.location.href = url;
-        return;
-      }
-
-      setJitsiUrl(url);
       setIsLoading(false);
 
-      // Poll every 15 s — redirect when class ends
+      // Poll: update session (picks up meet_link once teacher saves it) + redirect when ended
       pollRef.current = setInterval(async () => {
         try {
           const resp = await fetch(`${apiBase}/api/v1/classes/${classId}`, {
@@ -306,13 +203,14 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           });
           if (resp.ok) {
             const updated = (await resp.json()) as LiveClassSession;
+            setSession(updated);
             if (updated.status === "ended") {
               void cleanup();
               router.push(dashboardPath);
             }
           }
         } catch { /* ignore */ }
-      }, 15_000);
+      }, 10_000);
     }
 
     void initialize().catch((err: unknown) => {
@@ -321,7 +219,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
         setError("Classroom failed to start. Please retry.");
         setCanRetry(true);
         setIsLoading(false);
-        console.error("[LiveClassroomRoom] Unhandled init error:", err);
+        console.error("[LiveClassroomRoom] init error:", err);
       }
     });
 
@@ -329,7 +227,6 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthLoading, user, retryKey]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => { void cleanup(); };
   }, [cleanup]);
@@ -367,215 +264,284 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     }
   }
 
+  async function handleSaveMeetLink() {
+    const trimmed = linkInput.trim();
+    if (!trimmed) return;
+    if (!trimmed.startsWith("https://")) {
+      setLinkSaveError("Link must start with https://");
+      return;
+    }
+    setIsSavingLink(true);
+    setLinkSaveError("");
+    try {
+      await saveMeetLink(classId, trimmed);
+      setSession((prev) => prev ? { ...prev, meet_link: trimmed } : prev);
+    } catch {
+      setLinkSaveError("Failed to save link. Please try again.");
+    } finally {
+      setIsSavingLink(false);
+    }
+  }
+
   if (!isAuthLoading && !user) {
     router.push("/login");
     return null;
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Shared top bar ────────────────────────────────────────────────────────
 
-  return (
+  const topBar = (
     <div
-      style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column", background: "#0f172a" }}
+      style={{ height: 52, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px", background: "rgba(15,23,42,0.98)", borderBottom: "1px solid rgba(255,255,255,0.06)", zIndex: 10 }}
     >
-      {/* ── Top bar (44 px) ─────────────────────────────────────────────── */}
-      <div
-        style={{ height: 44, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px", background: "rgba(30,41,59,0.97)", zIndex: 10 }}
-      >
-        {/* Left: live dot + title */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#10b981", animation: "pulse 2s infinite", flexShrink: 0 }} />
-          <span style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {session?.title ?? "Live Classroom"}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#10b981", animation: "pulse 2s infinite", flexShrink: 0 }} />
+        <span style={{ fontSize: 14, fontWeight: 600, color: "#f1f5f9", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {session?.title ?? "Live Classroom"}
+        </span>
+        {session?.teacher_name && (
+          <span style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>
+            · {session.teacher_name}
           </span>
-          {session && (
-            <span style={{ fontSize: 10, fontWeight: 700, color: "#34d399", background: "rgba(52,211,153,0.15)", borderRadius: 99, padding: "2px 8px", flexShrink: 0 }}>
-              LIVE
-            </span>
-          )}
-        </div>
-
-        {/* Right: recording + end/leave */}
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-          {isMainTeacher && session && (
-            <button
-              type="button"
-              onClick={() => void handleToggleRecording()}
-              style={{
-                display: "flex", alignItems: "center", gap: 4,
-                padding: "4px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none",
-                background: isRecording ? "#ef4444" : "#334155", color: "#f1f5f9",
-              }}
-            >
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: isRecording ? "#fff" : "#94a3b8" }} />
-              {isRecording ? "Stop" : "Rec"}
-            </button>
-          )}
-
-          {isMainTeacher ? (
-            <button
-              type="button"
-              onClick={() => void handleEndClass()}
-              style={{ padding: "4px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none", background: "#dc2626", color: "#fff" }}
-            >
-              End Class
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => void handleLeave()}
-              style={{ padding: "4px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none", background: "#475569", color: "#f1f5f9" }}
-            >
-              Leave
-            </button>
-          )}
-        </div>
+        )}
+        {session && (
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#34d399", background: "rgba(52,211,153,0.15)", borderRadius: 99, padding: "2px 8px", flexShrink: 0 }}>
+            LIVE
+          </span>
+        )}
       </div>
 
-      {/* ── Main area ───────────────────────────────────────────────────── */}
-      <div style={{ position: "absolute", top: 44, left: 0, right: 0, bottom: 0 }}>
-
-        {/* Loading state */}
-        {isLoading && (
-          <div style={{ position: "absolute", inset: 0, zIndex: 20, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, background: "#0f172a" }}>
-            <div style={{ width: 40, height: 40, borderRadius: "50%", border: "4px solid #10b981", borderTopColor: "transparent", animation: "spin 0.8s linear infinite" }} />
-            <p style={{ fontSize: 14, fontWeight: 600, color: "#cbd5e1" }}>Setting up classroom…</p>
-          </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+        {isMainTeacher && session && (
+          <button
+            type="button"
+            onClick={() => void handleToggleRecording()}
+            style={{
+              display: "flex", alignItems: "center", gap: 4,
+              padding: "4px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none",
+              background: isRecording ? "#ef4444" : "#334155", color: "#f1f5f9",
+            }}
+          >
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: isRecording ? "#fff" : "#94a3b8" }} />
+            {isRecording ? "Stop" : "Rec"}
+          </button>
         )}
 
-        {/* Error state */}
-        {!isLoading && error && (
-          <div style={{ position: "absolute", inset: 0, zIndex: 20, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20, background: "#0f172a", padding: 32, textAlign: "center" }}>
-            <div style={{ width: 56, height: 56, borderRadius: 16, background: "rgba(239,68,68,0.15)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <span style={{ fontSize: 24, fontWeight: 700, color: "#f87171" }}>!</span>
-            </div>
-            <p style={{ fontSize: 14, fontWeight: 500, color: "#e2e8f0", maxWidth: 360 }}>{error}</p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center" }}>
-              {sessionExpired ? (
-                <button
-                  type="button"
-                  onClick={() => router.push("/login")}
-                  style={{ padding: "10px 24px", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "none", background: "#10b981", color: "#fff" }}
-                >
-                  Sign In
-                </button>
-              ) : canRetry ? (
-                <button
-                  type="button"
-                  onClick={handleRetry}
-                  style={{ padding: "10px 24px", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "none", background: "#10b981", color: "#fff" }}
-                >
-                  Retry
-                </button>
-              ) : null}
+        {isMainTeacher ? (
+          <button
+            type="button"
+            onClick={() => void handleEndClass()}
+            style={{ padding: "4px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none", background: "#dc2626", color: "#fff" }}
+          >
+            End Class
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void handleLeave()}
+            style={{ padding: "4px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none", background: "#475569", color: "#f1f5f9" }}
+          >
+            Leave
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  // ── Error / loading overlays ───────────────────────────────────────────────
+
+  if (isLoading) {
+    return (
+      <div style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#0f172a" }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
+          <div style={{ width: 40, height: 40, borderRadius: "50%", border: "4px solid #10b981", borderTopColor: "transparent", animation: "spin 0.8s linear infinite" }} />
+          <p style={{ fontSize: 14, fontWeight: 600, color: "#cbd5e1" }}>Setting up classroom…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#0f172a", padding: 32 }}>
+        <div style={{ maxWidth: 400, textAlign: "center" }}>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: "rgba(239,68,68,0.15)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
+            <span style={{ fontSize: 24, fontWeight: 700, color: "#f87171" }}>!</span>
+          </div>
+          <p style={{ fontSize: 14, color: "#e2e8f0", marginBottom: 24 }}>{error}</p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center" }}>
+            {sessionExpired && (
+              <button type="button" onClick={() => router.push("/login")} style={{ padding: "10px 24px", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "none", background: "#10b981", color: "#fff" }}>
+                Sign In
+              </button>
+            )}
+            {canRetry && (
+              <button type="button" onClick={handleRetry} style={{ padding: "10px 24px", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "none", background: "#10b981", color: "#fff" }}>
+                Retry
+              </button>
+            )}
+            <button type="button" onClick={() => router.push(dashboardPath)} style={{ padding: "10px 24px", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "none", background: "rgba(255,255,255,0.1)", color: "#f1f5f9" }}>
+              Back to Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Teacher control panel ─────────────────────────────────────────────────
+
+  if (isTeacher && session) {
+    const meetLink = session.meet_link;
+
+    return (
+      <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column", background: "#0f172a" }}>
+        {topBar}
+
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, overflowY: "auto" }}>
+          <div style={{ maxWidth: 520, width: "100%", display: "flex", flexDirection: "column", gap: 16 }}>
+
+            {/* ── Step 1: Open Google Meet ─────────────────────────────── */}
+            <div style={{ background: "rgba(30,41,59,0.9)", borderRadius: 16, padding: 24, border: "1px solid rgba(255,255,255,0.07)" }}>
+              <p style={{ fontSize: 11, fontWeight: 700, color: "#64748b", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
+                Step 1
+              </p>
+              <p style={{ fontSize: 15, fontWeight: 600, color: "#f1f5f9", marginBottom: 6 }}>
+                Start your Google Meet
+              </p>
+              <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 16, lineHeight: 1.6 }}>
+                Click below to create a new meeting. Copy the link Google Meet gives you.
+              </p>
               <button
                 type="button"
-                onClick={() => router.push(dashboardPath)}
-                style={{ padding: "10px 24px", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "none", background: "rgba(255,255,255,0.1)", color: "#f1f5f9" }}
+                onClick={() => window.open("https://meet.google.com/new", "_blank")}
+                style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 20px", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", border: "none", background: "#1a73e8", color: "#fff" }}
               >
-                Back to Dashboard
+                <span style={{ fontSize: 16 }}>📹</span>
+                Start Class in Google Meet
               </button>
             </div>
-          </div>
-        )}
 
-        {/* ── Teacher: control panel (Jitsi is in a separate tab) ─────────── */}
-        {!isLoading && !error && isTeacher && jitsiUrl && (
-          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#0f172a", padding: 32 }}>
-            <div style={{ maxWidth: 480, width: "100%", background: "rgba(30,41,59,0.9)", borderRadius: 20, padding: 32, border: `1px solid ${mediaBlocked ? "rgba(239,68,68,0.35)" : "rgba(52,211,153,0.2)"}`, textAlign: "center" }}>
+            {/* ── Step 2: Paste and save link ──────────────────────────── */}
+            <div style={{ background: "rgba(30,41,59,0.9)", borderRadius: 16, padding: 24, border: "1px solid rgba(255,255,255,0.07)" }}>
+              <p style={{ fontSize: 11, fontWeight: 700, color: "#64748b", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
+                Step 2
+              </p>
+              <p style={{ fontSize: 15, fontWeight: 600, color: "#f1f5f9", marginBottom: 6 }}>
+                Share the meeting link with students
+              </p>
+              <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 14, lineHeight: 1.6 }}>
+                Paste the Google Meet link here. Students will see a &ldquo;Join Live Class&rdquo; button immediately.
+              </p>
 
-              {/* Status indicator */}
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 20 }}>
-                <span style={{ width: 10, height: 10, borderRadius: "50%", background: mediaBlocked ? "#ef4444" : "#10b981", animation: "pulse 2s infinite", display: "inline-block" }} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: mediaBlocked ? "#f87171" : "#34d399", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                  {mediaBlocked ? "Camera / Mic Blocked" : "Classroom Running"}
-                </span>
-              </div>
-
-              <h2 style={{ fontSize: 20, fontWeight: 700, color: "#f1f5f9", marginBottom: 8 }}>
-                {session?.title ?? "Live Classroom"}
-              </h2>
-
-              {mediaBlocked ? (
-                /* ── Media denied warning ──────────────────────────────────── */
-                <>
-                  <p style={{ fontSize: 13, color: "#fca5a5", marginBottom: 20, lineHeight: 1.7 }}>
-                    Camera and microphone access was blocked.<br />
-                    Click the camera icon in your browser&apos;s address bar to allow access, then reopen the classroom.
-                  </p>
+              {meetLink ? (
+                /* Link already saved */
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderRadius: 10, background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)", marginBottom: 10 }}>
+                    <span style={{ fontSize: 14 }}>✅</span>
+                    <span style={{ fontSize: 13, color: "#34d399", fontWeight: 500, wordBreak: "break-all" }}>{meetLink}</span>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      console.log("[LiveClassroomRoom] Teacher reopening Jitsi after media block:", jitsiUrl);
-                      window.open(jitsiUrl, "_blank");
-                    }}
-                    style={{
-                      width: "100%", padding: "12px 20px", borderRadius: 12, fontSize: 14,
-                      fontWeight: 700, cursor: "pointer", border: "1px solid rgba(239,68,68,0.4)",
-                      background: "rgba(239,68,68,0.15)", color: "#fca5a5", marginBottom: 8,
-                    }}
+                    onClick={() => { setLinkInput(meetLink); setSession((p) => p ? { ...p, meet_link: null } : p); }}
+                    style={{ fontSize: 12, color: "#64748b", background: "none", border: "none", cursor: "pointer", padding: 0 }}
                   >
-                    Open Jitsi Anyway
+                    Change link
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMediaBlocked(false);
-                      hasInitializedRef.current = false;
-                      isFetchingClassRef.current = false;
-                      setJitsiUrl("");
-                      setIsLoading(true);
-                      setRetryKey((k) => k + 1);
-                    }}
-                    style={{
-                      width: "100%", padding: "10px 20px", borderRadius: 12, fontSize: 13,
-                      fontWeight: 600, cursor: "pointer", border: "none",
-                      background: "#10b981", color: "#fff",
-                    }}
-                  >
-                    Retry with Permissions
-                  </button>
-                </>
+                </div>
               ) : (
-                /* ── Normal running state ──────────────────────────────────── */
-                <>
-                  <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 28, lineHeight: 1.6 }}>
-                    Your Jitsi classroom opened in a new tab.<br />
-                    Keep this page open to use recording controls and end the class.
-                  </p>
+                /* Input form */
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <input
+                    type="url"
+                    placeholder="https://meet.google.com/abc-defg-hij"
+                    value={linkInput}
+                    onChange={(e) => setLinkInput(e.target.value)}
+                    style={{ padding: "10px 14px", borderRadius: 10, fontSize: 13, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.05)", color: "#f1f5f9", outline: "none", width: "100%", boxSizing: "border-box" }}
+                  />
+                  {linkSaveError && (
+                    <p style={{ fontSize: 12, color: "#f87171", margin: 0 }}>{linkSaveError}</p>
+                  )}
                   <button
                     type="button"
-                    onClick={() => {
-                      console.log("[LiveClassroomRoom] Teacher reopening Jitsi tab:", jitsiUrl);
-                      window.open(jitsiUrl, "_blank");
-                    }}
-                    style={{
-                      width: "100%", padding: "12px 20px", borderRadius: 12, fontSize: 14,
-                      fontWeight: 700, cursor: "pointer", border: "none",
-                      background: "linear-gradient(135deg, #10b981, #059669)",
-                      color: "#fff", marginBottom: 12,
-                    }}
+                    onClick={() => void handleSaveMeetLink()}
+                    disabled={isSavingLink || !linkInput.trim()}
+                    style={{ padding: "10px 20px", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", border: "none", background: "#10b981", color: "#fff", opacity: isSavingLink || !linkInput.trim() ? 0.6 : 1 }}
                   >
-                    Open Classroom in Jitsi
+                    {isSavingLink ? "Saving…" : "Share Link with Students"}
                   </button>
-                  <p style={{ fontSize: 11, color: "#64748b", marginBottom: 0 }}>
-                    Teacher opens the room first, then students can join.
-                  </p>
-                </>
+                </div>
               )}
             </div>
-          </div>
-        )}
 
-        {/* ── Student: Jitsi embedded iframe ──────────────────────────────── */}
-        {!isLoading && !error && !isTeacher && jitsiUrl && (
-          <iframe
-            src={jitsiUrl}
-            allow="camera; microphone; display-capture; autoplay; clipboard-write"
-            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none", display: "block" }}
-            title="Live Classroom"
-          />
-        )}
+            {/* ── Reopen button ────────────────────────────────────────── */}
+            {meetLink && (
+              <button
+                type="button"
+                onClick={() => window.open(meetLink, "_blank")}
+                style={{ padding: "12px 20px", borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: "pointer", border: "none", background: "#1a73e8", color: "#fff" }}
+              >
+                Rejoin Google Meet
+              </button>
+            )}
+
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Student view ──────────────────────────────────────────────────────────
+
+  const meetLink = session?.meet_link ?? null;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column", background: "#0f172a" }}>
+      {topBar}
+
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 32 }}>
+        <div style={{ maxWidth: 440, width: "100%", background: "rgba(30,41,59,0.9)", borderRadius: 20, padding: 36, border: `1px solid ${meetLink ? "rgba(52,211,153,0.25)" : "rgba(255,255,255,0.07)"}`, textAlign: "center" }}>
+
+          {/* Live badge */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 20 }}>
+            <span style={{ width: 9, height: 9, borderRadius: "50%", background: meetLink ? "#10b981" : "#f59e0b", animation: "pulse 2s infinite", display: "inline-block" }} />
+            <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: meetLink ? "#34d399" : "#fbbf24" }}>
+              {meetLink ? "Class is Live" : "Waiting for Link"}
+            </span>
+          </div>
+
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: "#f1f5f9", marginBottom: 6 }}>
+            {session?.title ?? "Live Classroom"}
+          </h2>
+          {session?.teacher_name && (
+            <p style={{ fontSize: 13, color: "#64748b", marginBottom: 28 }}>
+              {session.teacher_name} is teaching
+            </p>
+          )}
+
+          {meetLink ? (
+            <>
+              <button
+                type="button"
+                onClick={() => window.open(meetLink, "_blank")}
+                style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "13px 28px", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: "pointer", border: "none", background: "#1a73e8", color: "#fff", boxShadow: "0 4px 24px rgba(26,115,232,0.35)" }}
+              >
+                <span style={{ fontSize: 18 }}>📹</span>
+                Join Live Class
+              </button>
+              <p style={{ fontSize: 11, color: "#475569", marginTop: 14 }}>
+                Opens Google Meet in a new tab
+              </p>
+            </>
+          ) : (
+            <div style={{ padding: "14px 20px", borderRadius: 12, background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)" }}>
+              <p style={{ fontSize: 13, color: "#fbbf24", margin: 0, lineHeight: 1.6 }}>
+                Waiting for your teacher to share the meeting link…<br />
+                <span style={{ fontSize: 11, color: "#92400e" }}>This page checks automatically every 10 seconds.</span>
+              </p>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
