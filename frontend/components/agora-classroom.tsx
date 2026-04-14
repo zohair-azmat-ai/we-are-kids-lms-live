@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { IAgoraRTCClient, IAgoraRTCRemoteUser, IRemoteVideoTrack, IRemoteAudioTrack } from "agora-rtc-sdk-ng";
-import { getAccessToken } from "@/lib/demo-auth";
 
-// TEMPORARY HARDCODED TEST — bypasses all env/cache issues
+// TEMPORARY HARDCODED TEMP-TOKEN TEST
 const APP_ID = "4529ce21b87548c28408b0a7eb740b44";
+const TEMP_TOKEN = "007eJxTYEgPWVdtve3AsZ0vr8TPXxHo9UinLPNfyFTm6kvvc89elPmqwGBiamSZnGpkmGRhbmpikWxkYWJgkWSQaJ6aZG5ikGRiUqBzL7MhkJHhEJ8IEyMDBIL4fAzlqYlFqdmZKck5icXFiQwMAFvOJPQ=";
+const CHANNEL = "wearekidsclassa";
 
 interface AgoraClassroomProps {
   classId: string;
@@ -87,22 +88,6 @@ export default function AgoraClassroom({ classId, onLeave }: AgoraClassroomProps
         console.log("[Agora] Loading SDK...");
         const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
 
-        // Fetch token directly from backend before any join attempt
-        const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").trim().replace(/\/$/, "");
-        const tokenUrl = `${apiBase}/api/v1/agora/token?channel=${encodeURIComponent(channelName)}&uid=${sessionUid}`;
-        console.log("[Agora] Fetching token —", tokenUrl);
-        const accessToken = getAccessToken();
-        const tokenRes = await fetch(tokenUrl, {
-          method: "GET",
-          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
-        });
-        if (!tokenRes.ok) {
-          const errText = await tokenRes.text().catch(() => tokenRes.statusText);
-          throw new Error(`[Agora] Token fetch failed ${tokenRes.status}: ${errText}`);
-        }
-        const data = await tokenRes.json() as { appId: string; channel: string; token: string; uid: number };
-        console.log("TOKEN DATA:", data);
-
         if (cancelled) return;
 
         const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
@@ -156,9 +141,11 @@ export default function AgoraClassroom({ classId, onLeave }: AgoraClassroomProps
           setRemoteUsers((prev) => prev.filter((u) => u.uid !== remoteUser.uid));
         });
 
+        // TEMP TOKEN TEST — hardcoded join, no backend call
         console.log("APP_ID:", APP_ID);
-        console.log("TOKEN DATA:", data);
-        await client.join(APP_ID, data.channel, data.token, data.uid);
+        console.log("CHANNEL:", CHANNEL);
+        console.log("TEMP_TOKEN prefix:", TEMP_TOKEN.slice(0, 20) + "…");
+        await client.join(APP_ID, CHANNEL, TEMP_TOKEN, null);
         console.log("[Agora] Joined successfully, uid:", sessionUid);
 
         if (cancelled) {
