@@ -85,6 +85,8 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   const [isRecording, setIsRecording] = useState(false);
   // jitsiUrl is set for both teacher (for the "open again" button) and student (for iframe src)
   const [jitsiUrl, setJitsiUrl] = useState("");
+  // true when getUserMedia was denied — teacher can still open Jitsi with a warning
+  const [mediaBlocked, setMediaBlocked] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
 
   const hasInitializedRef = useRef(false);
@@ -126,6 +128,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     setCanRetry(false);
     setSessionExpired(false);
     setJitsiUrl("");
+    setMediaBlocked(false);
     setIsLoading(true);
     setRetryKey((k) => k + 1);
   }
@@ -230,8 +233,33 @@ export function LiveClassroomRoom({ classId, role }: Props) {
       const url = buildJitsiUrl(roomName, currentUser.name);
       console.log("[Jitsi] Room URL:", url, "| teacher:", isTeacher);
 
-      // ── Teacher: open in a new tab, stay on LMS control panel ──────────
+      // ── Teacher: request media permissions, then open in a new tab ───────
       if (isTeacher) {
+        // Ask the browser for camera + mic before opening the Jitsi tab.
+        // This surfaces the permission prompt in the LMS context first so the
+        // teacher understands what to allow, and confirms their hardware works.
+        // NOTE: Permissions are per-origin — granting here does not auto-grant
+        // on meet.jit.si, but the browser will remember the user allowed it and
+        // the prompt on Jitsi is usually pre-filled / auto-accepted.
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+          // Release the tracks immediately — Jitsi will re-acquire them in its tab.
+          stream.getTracks().forEach((t) => t.stop());
+          console.log("[LiveClassroomRoom] Media permissions granted — opening Jitsi in new tab:", url);
+          setMediaBlocked(false);
+        } catch (mediaErr) {
+          console.warn("[LiveClassroomRoom] Media permission denied:", mediaErr);
+          // Don't block the teacher — they can still open Jitsi and deal with
+          // permissions there.  We just surface a warning in the control panel.
+          setMediaBlocked(true);
+        }
+
+        if (cancelled) return;
+
+        // Open the Jitsi room in a new browser tab.
+        // The teacher becomes moderator on public meet.jit.si by being first to
+        // arrive — this only works reliably outside an iframe, hence the new tab.
+        console.log("[LiveClassroomRoom] Teacher flow: new-tab | URL:", url);
         window.open(url, "_blank");
         setJitsiUrl(url); // stored so "Open Again" button works
         setIsLoading(false);
@@ -454,41 +482,87 @@ export function LiveClassroomRoom({ classId, role }: Props) {
         {/* ── Teacher: control panel (Jitsi is in a separate tab) ─────────── */}
         {!isLoading && !error && isTeacher && jitsiUrl && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#0f172a", padding: 32 }}>
-            <div style={{ maxWidth: 480, width: "100%", background: "rgba(30,41,59,0.9)", borderRadius: 20, padding: 32, border: "1px solid rgba(52,211,153,0.2)", textAlign: "center" }}>
+            <div style={{ maxWidth: 480, width: "100%", background: "rgba(30,41,59,0.9)", borderRadius: 20, padding: 32, border: `1px solid ${mediaBlocked ? "rgba(239,68,68,0.35)" : "rgba(52,211,153,0.2)"}`, textAlign: "center" }}>
 
               {/* Status indicator */}
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 20 }}>
-                <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#10b981", animation: "pulse 2s infinite", display: "inline-block" }} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#34d399", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                  Classroom Running
+                <span style={{ width: 10, height: 10, borderRadius: "50%", background: mediaBlocked ? "#ef4444" : "#10b981", animation: "pulse 2s infinite", display: "inline-block" }} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: mediaBlocked ? "#f87171" : "#34d399", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                  {mediaBlocked ? "Camera / Mic Blocked" : "Classroom Running"}
                 </span>
               </div>
 
               <h2 style={{ fontSize: 20, fontWeight: 700, color: "#f1f5f9", marginBottom: 8 }}>
                 {session?.title ?? "Live Classroom"}
               </h2>
-              <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 28, lineHeight: 1.6 }}>
-                Your Jitsi classroom opened in a new tab.<br />
-                Keep this page open to use recording controls and end the class.
-              </p>
 
-              {/* Reopen button */}
-              <button
-                type="button"
-                onClick={() => window.open(jitsiUrl, "_blank")}
-                style={{
-                  width: "100%", padding: "12px 20px", borderRadius: 12, fontSize: 14,
-                  fontWeight: 700, cursor: "pointer", border: "none",
-                  background: "linear-gradient(135deg, #10b981, #059669)",
-                  color: "#fff", marginBottom: 12,
-                }}
-              >
-                Open Classroom in Jitsi
-              </button>
-
-              <p style={{ fontSize: 11, color: "#64748b", marginBottom: 0 }}>
-                Teacher opens the room first, then students can join.
-              </p>
+              {mediaBlocked ? (
+                /* ── Media denied warning ──────────────────────────────────── */
+                <>
+                  <p style={{ fontSize: 13, color: "#fca5a5", marginBottom: 20, lineHeight: 1.7 }}>
+                    Camera and microphone access was blocked.<br />
+                    Click the camera icon in your browser&apos;s address bar to allow access, then reopen the classroom.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      console.log("[LiveClassroomRoom] Teacher reopening Jitsi after media block:", jitsiUrl);
+                      window.open(jitsiUrl, "_blank");
+                    }}
+                    style={{
+                      width: "100%", padding: "12px 20px", borderRadius: 12, fontSize: 14,
+                      fontWeight: 700, cursor: "pointer", border: "1px solid rgba(239,68,68,0.4)",
+                      background: "rgba(239,68,68,0.15)", color: "#fca5a5", marginBottom: 8,
+                    }}
+                  >
+                    Open Jitsi Anyway
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMediaBlocked(false);
+                      hasInitializedRef.current = false;
+                      isFetchingClassRef.current = false;
+                      setJitsiUrl("");
+                      setIsLoading(true);
+                      setRetryKey((k) => k + 1);
+                    }}
+                    style={{
+                      width: "100%", padding: "10px 20px", borderRadius: 12, fontSize: 13,
+                      fontWeight: 600, cursor: "pointer", border: "none",
+                      background: "#10b981", color: "#fff",
+                    }}
+                  >
+                    Retry with Permissions
+                  </button>
+                </>
+              ) : (
+                /* ── Normal running state ──────────────────────────────────── */
+                <>
+                  <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 28, lineHeight: 1.6 }}>
+                    Your Jitsi classroom opened in a new tab.<br />
+                    Keep this page open to use recording controls and end the class.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      console.log("[LiveClassroomRoom] Teacher reopening Jitsi tab:", jitsiUrl);
+                      window.open(jitsiUrl, "_blank");
+                    }}
+                    style={{
+                      width: "100%", padding: "12px 20px", borderRadius: 12, fontSize: 14,
+                      fontWeight: 700, cursor: "pointer", border: "none",
+                      background: "linear-gradient(135deg, #10b981, #059669)",
+                      color: "#fff", marginBottom: 12,
+                    }}
+                  >
+                    Open Classroom in Jitsi
+                  </button>
+                  <p style={{ fontSize: 11, color: "#64748b", marginBottom: 0 }}>
+                    Teacher opens the room first, then students can join.
+                  </p>
+                </>
+              )}
             </div>
           </div>
         )}
