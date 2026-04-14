@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import type { IAgoraRTCClient, IAgoraRTCRemoteUser, IRemoteVideoTrack, IRemoteAudioTrack } from "agora-rtc-sdk-ng";
 import { fetchAgoraToken } from "@/lib/api";
 
+// Build-time constant — Next.js inlines NEXT_PUBLIC_* at compile time.
+const APP_ID = (process.env.NEXT_PUBLIC_AGORA_APP_ID || "").trim();
+
 interface AgoraClassroomProps {
   classId: string;
   onLeave?: () => void;
@@ -84,9 +87,9 @@ export default function AgoraClassroom({ classId, onLeave }: AgoraClassroomProps
         console.log("[Agora] Loading SDK...");
         const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
 
-        // --- appId source of truth: NEXT_PUBLIC_AGORA_APP_ID env var ---
-        const envAppId = (process.env.NEXT_PUBLIC_AGORA_APP_ID ?? "").trim();
-        console.log("[Agora] env NEXT_PUBLIC_AGORA_APP_ID —", {
+        // --- appId source of truth: module-level APP_ID constant ---
+        const envAppId = APP_ID;
+        console.log("[Agora] APP_ID (build-time) —", {
           value: envAppId,
           length: envAppId.length,
           set: envAppId.length > 0,
@@ -179,6 +182,7 @@ export default function AgoraClassroom({ classId, onLeave }: AgoraClassroomProps
         });
 
         // Join with EXACT validated appId and EXACT uid used to generate the token
+        console.log("APP_ID:", APP_ID);
         console.log("[Agora] Joining —", {
           joinAppId,
           joinAppId_length: joinAppId.length,
