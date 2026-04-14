@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import type { IAgoraRTCClient, IAgoraRTCRemoteUser, IRemoteVideoTrack, IRemoteAudioTrack } from "agora-rtc-sdk-ng";
 import { getAccessToken } from "@/lib/demo-auth";
 
-// Build-time constant — Next.js inlines NEXT_PUBLIC_* at compile time.
-const APP_ID = (process.env.NEXT_PUBLIC_AGORA_APP_ID || "").trim();
+// TEMPORARY HARDCODED TEST — bypasses all env/cache issues
+const APP_ID = "4529ce21b87548c28408b0a7eb740b44";
 
 interface AgoraClassroomProps {
   classId: string;
@@ -157,7 +157,8 @@ export default function AgoraClassroom({ classId, onLeave }: AgoraClassroomProps
         });
 
         console.log("APP_ID:", APP_ID);
-        await client.join(data.appId, data.channel, data.token, data.uid);
+        console.log("TOKEN DATA:", data);
+        await client.join(APP_ID, data.channel, data.token, data.uid);
         console.log("[Agora] Joined successfully, uid:", sessionUid);
 
         if (cancelled) {
