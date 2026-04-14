@@ -6,7 +6,6 @@ import { fetchAgoraToken } from "@/lib/api";
 
 interface AgoraClassroomProps {
   classId: string;
-  uid?: number;
   onLeave?: () => void;
 }
 
@@ -53,7 +52,7 @@ function RemoteUserTile({ user }: { user: RemoteUser }) {
   );
 }
 
-export default function AgoraClassroom({ classId, uid = 0, onLeave }: AgoraClassroomProps) {
+export default function AgoraClassroom({ classId, onLeave }: AgoraClassroomProps) {
   const localVideoRef = useRef<HTMLDivElement>(null);
   const [remoteUsers, setRemoteUsers] = useState<RemoteUser[]>([]);
   const [joined, setJoined] = useState(false);
@@ -61,24 +60,39 @@ export default function AgoraClassroom({ classId, uid = 0, onLeave }: AgoraClass
   const [micMuted, setMicMuted] = useState(false);
   const [camOff, setCamOff] = useState(false);
 
+  // Generate a concrete non-zero numeric UID once per session.
+  // This is stored in a ref so it never changes across re-renders.
+  // The SAME uid is sent to the backend for token generation AND used in client.join()
+  // to guarantee a perfect match — resolving the uid=0/null mismatch that caused
+  // "CAN_NOT_GET_GATEWAY_SERVER / dynamic key or token timeout".
+  const sessionUidRef = useRef<number>(Math.floor(Math.random() * 999_999_999) + 1);
+
   // Refs to hold Agora objects for cleanup
   const clientRef = useRef<IAgoraRTCClient | null>(null);
   const localVideoTrackRef = useRef<{ close: () => void; play: (el: HTMLElement) => void; setEnabled: (v: boolean) => Promise<void> } | null>(null);
   const localAudioTrackRef = useRef<{ close: () => void; setEnabled: (v: boolean) => Promise<void> } | null>(null);
 
+  // Channel name: strip all non-alphanumeric chars from classId to satisfy Agora naming rules
   const channelName = `wearekids${classId.replace(/[^a-zA-Z0-9]/g, "")}`;
 
   useEffect(() => {
     let cancelled = false;
+    const sessionUid = sessionUidRef.current;
 
     async function join() {
       try {
         console.log("[Agora] Loading SDK...");
         const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
 
-        console.log("[Agora] Fetching token for channel:", channelName);
-        const { token, app_id } = await fetchAgoraToken(channelName, uid);
-        console.log("[Agora] Token received, app_id:", app_id);
+        // Fetch token using the EXACT same uid we will pass to client.join()
+        console.log("[Agora] Requesting token — channel:", channelName, "uid:", sessionUid);
+        const tokenResp = await fetchAgoraToken(channelName, sessionUid);
+        console.log("[Agora] Token response —", {
+          app_id: tokenResp.app_id,
+          channel: tokenResp.channel,
+          uid: tokenResp.uid,
+          token_prefix: tokenResp.token.slice(0, 12) + "…",
+        });
 
         if (cancelled) return;
 
@@ -133,9 +147,16 @@ export default function AgoraClassroom({ classId, uid = 0, onLeave }: AgoraClass
           setRemoteUsers((prev) => prev.filter((u) => u.uid !== remoteUser.uid));
         });
 
-        console.log("[Agora] Joining channel:", channelName, "uid:", uid);
-        await client.join(app_id, channelName, token, uid || null);
-        console.log("[Agora] Joined successfully");
+        // Join with EXACT app_id from token response and EXACT uid used to generate the token
+        console.log("[Agora] Joining —", {
+          app_id: tokenResp.app_id,
+          channel: channelName,
+          uid: sessionUid,
+          token_uid_match: tokenResp.uid === sessionUid,
+          channel_match: tokenResp.channel === channelName,
+        });
+        await client.join(tokenResp.app_id, channelName, tokenResp.token, sessionUid);
+        console.log("[Agora] Joined successfully, uid:", sessionUid);
 
         if (cancelled) {
           await client.leave();
@@ -155,9 +176,10 @@ export default function AgoraClassroom({ classId, uid = 0, onLeave }: AgoraClass
         console.log("[Agora] Local tracks published");
 
         if (!cancelled) setJoined(true);
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
         console.error("[Agora] Error:", err);
-        if (!cancelled) setError(err?.message ?? "Failed to join classroom.");
+        if (!cancelled) setError(msg || "Failed to join classroom.");
       }
     }
 
@@ -169,7 +191,9 @@ export default function AgoraClassroom({ classId, uid = 0, onLeave }: AgoraClass
       localAudioTrackRef.current?.close();
       clientRef.current?.leave().catch(() => {});
     };
-  }, [channelName, uid]);
+    // channelName is derived from classId (stable); sessionUid is a ref value (never changes)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelName]);
 
   async function toggleMic() {
     if (!localAudioTrackRef.current) return;

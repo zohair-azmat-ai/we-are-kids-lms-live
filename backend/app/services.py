@@ -237,18 +237,32 @@ def generate_agora_rtc_token(
     uid: int,
     expire_seconds: int = 3600,
 ) -> str:
-    uid_str = str(uid)
+    """
+    Agora AccessToken v006 — matches the official Agora dynamic key algorithm.
+
+    uid=0 is the Agora convention for "any UID"; the official implementation uses
+    an empty string as the account contribution in both the HMAC message and the
+    CRC calculation.  Any non-zero uid is encoded as its decimal string.
+    """
+    # Official Agora convention: uid=0 → account="" (wildcard); else str(uid)
+    uid_str = "" if uid == 0 else str(uid)
+
     ts = int(_time.time())
     salt = _secrets.randbelow(100_000) + 1
     expire_ts = ts + expire_seconds
+
+    # Privilege keys: 1=JoinChannel 2=PublishAudio 3=PublishVideo 4=PublishData
     privileges = {1: expire_ts, 2: expire_ts, 3: expire_ts, 4: expire_ts}
-    content = _pack_uint32(ts) + _pack_uint32(salt) + _pack_map_uint32(privileges)
-    val = app_id.encode() + channel_name.encode() + uid_str.encode() + content
-    sig = _hmac.new(app_certificate.encode(), val, _hashlib.sha256).digest()
-    crc_ch = _crc32(channel_name.encode()) & 0xFFFF_FFFF
-    crc_uid = _crc32(uid_str.encode()) & 0xFFFF_FFFF
-    token_content = _pack_string(sig) + _pack_uint32(crc_ch) + _pack_uint32(crc_uid) + _pack_string(content)
-    return "006" + app_id + _base64.b64encode(token_content).decode()
+
+    msg = _pack_uint32(ts) + _pack_uint32(salt) + _pack_map_uint32(privileges)
+    val = app_id.encode("utf-8") + channel_name.encode("utf-8") + uid_str.encode("utf-8") + msg
+    sig = _hmac.new(app_certificate.encode("utf-8"), val, _hashlib.sha256).digest()
+
+    crc_ch  = _crc32(channel_name.encode("utf-8")) & 0xFFFF_FFFF
+    crc_uid = _crc32(uid_str.encode("utf-8"))       & 0xFFFF_FFFF
+
+    content = _pack_string(sig) + _pack_uint32(crc_ch) + _pack_uint32(crc_uid) + _pack_string(msg)
+    return "006" + app_id + _base64.b64encode(content).decode("utf-8")
 
 
 def build_live_class_response(classroom: Classroom, session: LiveSession | None) -> LiveClass:

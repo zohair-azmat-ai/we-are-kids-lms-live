@@ -595,10 +595,19 @@ def get_agora_token(
     current_user: User = Depends(get_current_user),
 ) -> AgoraTokenResponse:
     """Issue an Agora RTC token for the requesting user."""
+    logger.info(
+        "[Agora] token request — app_id_set=%s cert_set=%s channel=%r uid=%d",
+        bool(AGORA_APP_ID),
+        bool(AGORA_APP_CERTIFICATE),
+        channel,
+        uid,
+    )
     if not AGORA_APP_ID or not AGORA_APP_CERTIFICATE:
         raise HTTPException(status_code=503, detail="Agora is not configured.")
-    token = generate_agora_rtc_token(AGORA_APP_ID, AGORA_APP_CERTIFICATE, channel, uid)
-    return AgoraTokenResponse(token=token, app_id=AGORA_APP_ID)
+    expire_seconds = 3600
+    token = generate_agora_rtc_token(AGORA_APP_ID, AGORA_APP_CERTIFICATE, channel, uid, expire_seconds)
+    logger.info("[Agora] token issued — channel=%r uid=%d expire=%ds", channel, uid, expire_seconds)
+    return AgoraTokenResponse(token=token, app_id=AGORA_APP_ID, channel=channel, uid=uid)
 
 
 @api_router.post("/billing/checkout-session", response_model=BillingCheckoutResponse)
