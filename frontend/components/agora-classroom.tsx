@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { IAgoraRTCClient, IAgoraRTCRemoteUser, IRemoteVideoTrack, IRemoteAudioTrack } from "agora-rtc-sdk-ng";
 import { fetchAgoraToken } from "@/lib/api";
 
 interface AgoraClassroomProps {
@@ -11,8 +12,8 @@ interface AgoraClassroomProps {
 
 interface RemoteUser {
   uid: string | number;
-  videoTrack: { play: (el: HTMLElement) => void; stop: () => void } | null;
-  audioTrack: { play: () => void; stop: () => void } | null;
+  videoTrack: IRemoteVideoTrack | null;
+  audioTrack: IRemoteAudioTrack | null;
 }
 
 function RemoteUserTile({ user }: { user: RemoteUser }) {
@@ -25,6 +26,7 @@ function RemoteUserTile({ user }: { user: RemoteUser }) {
     return () => {
       user.videoTrack?.stop();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.videoTrack]);
 
   useEffect(() => {
@@ -34,6 +36,7 @@ function RemoteUserTile({ user }: { user: RemoteUser }) {
     return () => {
       user.audioTrack?.stop();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.audioTrack]);
 
   return (
@@ -59,9 +62,9 @@ export default function AgoraClassroom({ classId, uid = 0, onLeave }: AgoraClass
   const [camOff, setCamOff] = useState(false);
 
   // Refs to hold Agora objects for cleanup
-  const clientRef = useRef<any>(null);
-  const localVideoTrackRef = useRef<any>(null);
-  const localAudioTrackRef = useRef<any>(null);
+  const clientRef = useRef<IAgoraRTCClient | null>(null);
+  const localVideoTrackRef = useRef<{ close: () => void; play: (el: HTMLElement) => void; setEnabled: (v: boolean) => Promise<void> } | null>(null);
+  const localAudioTrackRef = useRef<{ close: () => void; setEnabled: (v: boolean) => Promise<void> } | null>(null);
 
   const channelName = `wearekids${classId.replace(/[^a-zA-Z0-9]/g, "")}`;
 
@@ -82,7 +85,7 @@ export default function AgoraClassroom({ classId, uid = 0, onLeave }: AgoraClass
         const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
         clientRef.current = client;
 
-        client.on("user-published", async (remoteUser: any, mediaType: string) => {
+        client.on("user-published", async (remoteUser: IAgoraRTCRemoteUser, mediaType: "audio" | "video") => {
           console.log("[Agora] Remote user published:", remoteUser.uid, mediaType);
           await client.subscribe(remoteUser, mediaType);
 
@@ -93,8 +96,8 @@ export default function AgoraClassroom({ classId, uid = 0, onLeave }: AgoraClass
                 u.uid === remoteUser.uid
                   ? {
                       ...u,
-                      videoTrack: mediaType === "video" ? remoteUser.videoTrack : u.videoTrack,
-                      audioTrack: mediaType === "audio" ? remoteUser.audioTrack : u.audioTrack,
+                      videoTrack: mediaType === "video" ? (remoteUser.videoTrack ?? null) : u.videoTrack,
+                      audioTrack: mediaType === "audio" ? (remoteUser.audioTrack ?? null) : u.audioTrack,
                     }
                   : u
               );
@@ -103,14 +106,14 @@ export default function AgoraClassroom({ classId, uid = 0, onLeave }: AgoraClass
               ...prev,
               {
                 uid: remoteUser.uid,
-                videoTrack: mediaType === "video" ? remoteUser.videoTrack ?? null : null,
-                audioTrack: mediaType === "audio" ? remoteUser.audioTrack ?? null : null,
+                videoTrack: mediaType === "video" ? (remoteUser.videoTrack ?? null) : null,
+                audioTrack: mediaType === "audio" ? (remoteUser.audioTrack ?? null) : null,
               },
             ];
           });
         });
 
-        client.on("user-unpublished", (remoteUser: any, mediaType: string) => {
+        client.on("user-unpublished", (remoteUser: IAgoraRTCRemoteUser, mediaType: "audio" | "video") => {
           console.log("[Agora] Remote user unpublished:", remoteUser.uid, mediaType);
           setRemoteUsers((prev) =>
             prev.map((u) =>
@@ -125,7 +128,7 @@ export default function AgoraClassroom({ classId, uid = 0, onLeave }: AgoraClass
           );
         });
 
-        client.on("user-left", (remoteUser: any) => {
+        client.on("user-left", (remoteUser: IAgoraRTCRemoteUser) => {
           console.log("[Agora] Remote user left:", remoteUser.uid);
           setRemoteUsers((prev) => prev.filter((u) => u.uid !== remoteUser.uid));
         });
