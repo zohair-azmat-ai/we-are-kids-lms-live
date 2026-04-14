@@ -596,8 +596,9 @@ def get_agora_token(
 ) -> AgoraTokenResponse:
     """Issue an Agora RTC token for the requesting user."""
     logger.info(
-        "[Agora] token request — app_id_set=%s cert_set=%s channel=%r uid=%d",
-        bool(AGORA_APP_ID),
+        "[Agora] token request — app_id=%r app_id_len=%d cert_set=%s channel=%r uid=%d",
+        AGORA_APP_ID,
+        len(AGORA_APP_ID),
         bool(AGORA_APP_CERTIFICATE),
         channel,
         uid,
@@ -606,7 +607,14 @@ def get_agora_token(
         raise HTTPException(status_code=503, detail="Agora is not configured.")
     expire_seconds = 3600
     token = generate_agora_rtc_token(AGORA_APP_ID, AGORA_APP_CERTIFICATE, channel, uid, expire_seconds)
-    logger.info("[Agora] token issued — channel=%r uid=%d expire=%ds", channel, uid, expire_seconds)
+    logger.info(
+        "[Agora] token issued — returning appId=%r appId_len=%d channel=%r uid=%d expire=%ds",
+        AGORA_APP_ID,
+        len(AGORA_APP_ID),
+        channel,
+        uid,
+        expire_seconds,
+    )
     return AgoraTokenResponse(token=token, appId=AGORA_APP_ID, channel=channel, uid=uid)
 
 

@@ -84,15 +84,46 @@ export default function AgoraClassroom({ classId, onLeave }: AgoraClassroomProps
         console.log("[Agora] Loading SDK...");
         const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
 
+        // --- appId source of truth: NEXT_PUBLIC_AGORA_APP_ID env var ---
+        const envAppId = (process.env.NEXT_PUBLIC_AGORA_APP_ID ?? "").trim();
+        console.log("[Agora] env NEXT_PUBLIC_AGORA_APP_ID —", {
+          value: envAppId,
+          length: envAppId.length,
+          set: envAppId.length > 0,
+        });
+
         // Fetch token using the EXACT same uid we will pass to client.join()
         console.log("[Agora] Requesting token — channel:", channelName, "uid:", sessionUid);
         const tokenResp = await fetchAgoraToken(channelName, sessionUid);
+        const backendAppId = (tokenResp.appId ?? "").trim();
         console.log("[Agora] Token response —", {
-          appId: tokenResp.appId,
+          backendAppId,
+          backendAppId_length: backendAppId.length,
           channel: tokenResp.channel,
           uid: tokenResp.uid,
           token_prefix: tokenResp.token.slice(0, 12) + "…",
         });
+
+        // --- Validate appId sources agree ---
+        if (envAppId.length === 0) {
+          throw new Error(
+            `[Agora] NEXT_PUBLIC_AGORA_APP_ID is empty — set this env var in Vercel/local .env.local`,
+          );
+        }
+        if (backendAppId.length === 0) {
+          throw new Error(
+            `[Agora] Backend returned empty appId — check AGORA_APP_ID env var on the backend`,
+          );
+        }
+        if (envAppId !== backendAppId) {
+          throw new Error(
+            `[Agora] appId MISMATCH — env="${envAppId}" (len=${envAppId.length}) vs backend="${backendAppId}" (len=${backendAppId.length})`,
+          );
+        }
+
+        // Single validated appId used for everything below
+        const joinAppId = backendAppId;
+        console.log("[Agora] appId validated — using joinAppId:", joinAppId, "length:", joinAppId.length);
 
         if (cancelled) return;
 
@@ -147,15 +178,16 @@ export default function AgoraClassroom({ classId, onLeave }: AgoraClassroomProps
           setRemoteUsers((prev) => prev.filter((u) => u.uid !== remoteUser.uid));
         });
 
-        // Join with EXACT appId from token response and EXACT uid used to generate the token
+        // Join with EXACT validated appId and EXACT uid used to generate the token
         console.log("[Agora] Joining —", {
-          appId: tokenResp.appId,
+          joinAppId,
+          joinAppId_length: joinAppId.length,
           channel: channelName,
           uid: sessionUid,
           token_uid_match: tokenResp.uid === sessionUid,
           channel_match: tokenResp.channel === channelName,
         });
-        await client.join(tokenResp.appId, channelName, tokenResp.token, sessionUid);
+        await client.join(joinAppId, channelName, tokenResp.token, sessionUid);
         console.log("[Agora] Joined successfully, uid:", sessionUid);
 
         if (cancelled) {
