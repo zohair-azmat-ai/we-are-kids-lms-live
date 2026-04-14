@@ -1,44 +1,22 @@
 "use client";
 
 /**
- * LiveClassroomRoom — direct Jitsi room launch
+ * LiveClassroomRoom — public Jitsi room, no auth required
  *
- * Architecture
- * ────────────
- * Instead of embedding the Jitsi External API (which was fragile across
- * browsers / mobile), we:
+ * Flow:
  *   1. Fetch the LMS class session (auth-race-safe direct fetch + retry)
- *   2. Register presence in the LMS
- *   3. Request a signed JWT from the backend (moderator for main_teacher)
- *   4. Render Jitsi inside a full-page <iframe> below the LMS header bar
+ *   2. Register LMS presence
+ *   3. Build a public meet.jit.si URL — no JWT, no login prompt
+ *   4. Desktop: render Jitsi inside a full-page <iframe>
+ *      Mobile:  redirect to Jitsi (iframe is unstable on mobile browsers)
  *
- * Auth-race fix (preserved):
- *  - Direct fetch() bypasses parseResponse/clearSession() so a transient 401
- *    does not wipe the token before the retry.
- *  - isFetchingClassRef prevents concurrent fetches (React Strict Mode / retryKey).
- *  - hasInitializedRef prevents initialize() from running more than once.
- *
- * ── Private / Self-Hosted Jitsi (production) ──────────────────────────────
- *
- * For full moderator control (main teacher can mute/remove participants,
- * lock the room, control recording) you MUST run a private Jitsi server
- * with JWT authentication enabled.
- *
- * Role mapping:
- *   main_teacher      → "moderator"  (host — full room control)
- *   assistant_teacher → "participant" (can present; no kick/mute power)
- *   student           → "participant" (view + audio/video only)
- *
- * JWT token flow (implemented):
- *   1. After session fetch, call GET /api/v1/jitsi/token?class_id=...
- *   2. Backend verifies LMS auth, resolves moderator flag, signs JWT
- *   3. If token received → URL = https://{domain}/{room}?jwt={token}#config...
- *   4. If token=null (JITSI_APP_SECRET not set) → plain URL (dev / public mode)
- *
- * The backend sets in the JWT payload:
- *   { "context": { "user": { "moderator": true/false } }, "room": "...", ... }
- *   Signed HS256 with JITSI_APP_SECRET. Prosody/Jicofo on a private server
- *   reads context.user.moderator and grants host privileges — no login prompt.
+ * Room naming strategy:
+ *   wearekids-{classId}-{sessionMinute}
+ *   - sessionMinute = session.started_at truncated to the minute (minutes since
+ *     Unix epoch).  This makes the room unique per session start so a stale
+ *     room from an earlier class doesn't carry over lobby/moderator state.
+ *   - Using started_at (not Date.now()) keeps the name identical for every
+ *     participant even if they join at different clock times.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -57,49 +35,52 @@ import {
 } from "@/lib/api";
 import { getAccessToken, isMainTeacherRole, isTeacherRole } from "@/lib/demo-auth";
 
-// ─── Types & constants ───────────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 type Props = {
   classId: string;
   role: "teacher" | "student";
 };
 
-// ── Configurable Jitsi domain ──────────────────────────────────────────────
-// Set NEXT_PUBLIC_JITSI_DOMAIN to your private/self-hosted Jitsi server for
-// production. Defaults to meet.jit.si for development / staging.
-const JITSI_DOMAIN = (process.env.NEXT_PUBLIC_JITSI_DOMAIN ?? "meet.jit.si").trim();
-
-// ── Room naming ────────────────────────────────────────────────────────────
-// Stable per class — all roles join the same room for a given classId.
-// Example: class "Class A" → "wearekidsclassa"
-function jitsiRoomName(classId: string): string {
-  return `wearekids${classId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()}`;
-}
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Builds a plain public Jitsi room URL (no JWT, no extra config overrides).
+ * Build a fully-public Jitsi room URL — no JWT, no login required.
  *
- * Kept minimal intentionally:
- * - config.p2p.enabled is NOT overridden — public meet.jit.si uses P2P for
- *   small rooms and JVB for larger ones. Forcing p2p=false breaks the
- *   XMPP/JVB connection path on public servers → "Connection failed" error.
- * - Audio processing flags are NOT set — meet.jit.si enables NS/AEC/AGC by
- *   default; redundant fragment overrides can confuse its config parser.
- * - Only prejoinPageEnabled=false and displayName are set.
+ * - prejoinPageEnabled=false  → skip the pre-join lobby
+ * - requireDisplayName=false  → skip the "enter your name" screen that looks
+ *                               like a login prompt
+ * - userInfo.displayName      → pre-fill the name so Jitsi doesn't ask
+ *
+ * The room name embeds the session's started_at minute so every class start
+ * gets a fresh room while all participants still land in the same room.
  */
-function buildJitsiUrl(classId: string, displayName?: string): string {
-  const room = jitsiRoomName(classId);
+function buildJitsiUrl(
+  classId: string,
+  startedAt: string | null | undefined,
+  displayName?: string,
+): string {
+  const safeid = classId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
 
-  const fragments: string[] = [
+  // Truncate to the minute so teacher and students share the same room name
+  // even if they navigate to the page a few seconds apart.
+  const minute = startedAt
+    ? Math.floor(new Date(startedAt).getTime() / 60_000)
+    : Math.floor(Date.now() / 60_000);
+
+  const roomName = `wearekids-${safeid}-${minute}`;
+
+  const fragments = [
     "config.prejoinPageEnabled=false",
+    "config.requireDisplayName=false",
   ];
 
   if (displayName) {
     fragments.push(`userInfo.displayName=${encodeURIComponent(displayName)}`);
   }
 
-  const url = `https://${JITSI_DOMAIN}/${room}#${fragments.join("&")}`;
-  console.log("[Jitsi] Final room URL:", url, "| jwt: none | mode: public iframe");
+  const url = `https://meet.jit.si/${roomName}#${fragments.join("&")}`;
+  console.log("[Jitsi] Room URL:", url);
   return url;
 }
 
@@ -172,7 +153,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     let cancelled = false;
 
     async function initialize() {
-      // ── Guard: token must exist ─────────────────────────────────────────
+      // ── Guard: LMS token must exist ────────────────────────────────────
       const token = getAccessToken();
       if (!token) {
         setSessionExpired(true);
@@ -185,7 +166,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
       if (isFetchingClassRef.current) return;
       isFetchingClassRef.current = true;
 
-      // ── Step 1: Fetch class session (direct fetch, no clearSession side-effect) ──
+      // ── Step 1: Fetch class session ────────────────────────────────────
       const apiBase = getApiBaseUrl();
 
       async function doFetchSession(): Promise<LiveClassSession> {
@@ -205,8 +186,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           return await doFetchSession();
         } catch (err) {
           if (err instanceof ApiError && err.status === 401) {
-            // Transient 401 — retry once after 500 ms.
-            // Token is still intact because we bypassed parseResponse/clearSession().
+            // Transient 401 — retry once after 500 ms (bypassed clearSession).
             await new Promise((r) => setTimeout(r, 500));
             if (cancelled) throw err;
             return doFetchSession();
@@ -258,27 +238,24 @@ export function LiveClassroomRoom({ classId, role }: Props) {
 
       if (cancelled) return;
 
-      // ── Step 3: Build plain public Jitsi URL (no JWT) ─────────────────
-      if (cancelled) return;
+      // ── Step 3: Build public Jitsi URL and launch ──────────────────────
+      const url = buildJitsiUrl(classId, classSession.started_at, currentUser.name);
 
-      const url = buildJitsiUrl(classId, currentUser.name);
-
-      // On mobile, iframe-embedded Jitsi fails to connect — redirect instead.
+      // Mobile: iframe is not stable — redirect to Jitsi directly
       const isMobile =
         typeof window !== "undefined" &&
         /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
       if (isMobile) {
-        console.log("[LiveClassroomRoom] Mobile detected — redirecting to Jitsi:", url);
+        console.log("[LiveClassroomRoom] Mobile detected — redirecting:", url);
         window.location.href = url;
-        return; // Don't set loading=false; the page will navigate away
+        return;
       }
 
-      console.log("[LiveClassroomRoom] Setting iframe src:", url);
       setJitsiUrl(url);
       setIsLoading(false);
 
-      // ── Step 4: Poll every 15 s — redirect when class ends ─────────────
+      // ── Step 4: Poll every 15 s — go to dashboard when class ends ──────
       pollRef.current = setInterval(async () => {
         try {
           const resp = await fetch(`${apiBase}/api/v1/classes/${classId}`, {
@@ -355,22 +332,16 @@ export function LiveClassroomRoom({ classId, role }: Props) {
 
   // ── Render ────────────────────────────────────────────────────────────────
   //
-  // Layout strategy (mobile-safe):
-  //   • Root <div> is position:fixed, covers 100% of the viewport — avoids
-  //     the broken 100vh / mobile browser-chrome shrink issue entirely.
-  //   • Minimal top bar: fixed height 44px, contains only essential controls.
-  //   • Jitsi <iframe> fills the remaining space via
-  //     position:absolute + top:44px + bottom:0 — no overflow clipping.
-  //   • Loading / error states use the same absolute overlay so they never
-  //     push content or break the layout.
-  //   • No card wrappers, no padding sections, no constrained containers.
+  //   • Root <div> is position:fixed — immune to mobile address-bar resize.
+  //   • 44px top bar holds title + controls.
+  //   • Jitsi <iframe> fills the rest via position:absolute + top:44.
+  //   • Loading/error overlays use the same absolute layer.
 
   return (
-    // Full-viewport fixed container — immune to mobile address-bar resize
     <div
       style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column", background: "#0f172a" }}
     >
-      {/* ── Minimal top bar (44 px) ─────────────────────────────────────── */}
+      {/* ── Top bar ─────────────────────────────────────────────────────── */}
       <div
         style={{ height: 44, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px", background: "rgba(30,41,59,0.97)", zIndex: 10 }}
       >
@@ -424,7 +395,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
         </div>
       </div>
 
-      {/* ── Call area — absolute, fills everything below the top bar ────── */}
+      {/* ── Call area ───────────────────────────────────────────────────── */}
       <div style={{ position: "absolute", top: 44, left: 0, right: 0, bottom: 0 }}>
 
         {/* Loading state */}
@@ -471,8 +442,8 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           </div>
         )}
 
-        {/* Jitsi iframe — desktop only; mobile uses window.location.href redirect */}
-        {jitsiUrl && typeof window !== "undefined" && !/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) && (
+        {/* Jitsi iframe — desktop only; mobile redirects via window.location.href */}
+        {jitsiUrl && (
           <iframe
             src={jitsiUrl}
             allow="camera; microphone; display-capture; autoplay; clipboard-write"
