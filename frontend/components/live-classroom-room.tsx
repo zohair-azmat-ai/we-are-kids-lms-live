@@ -1,22 +1,26 @@
 "use client";
 
 /**
- * LiveClassroomRoom — public Jitsi room, no auth required
+ * LiveClassroomRoom — split Jitsi flow
  *
- * Flow:
- *   1. Fetch the LMS class session (auth-race-safe direct fetch + retry)
- *   2. Register LMS presence
- *   3. Build a public meet.jit.si URL — no JWT, no login prompt
- *   4. Desktop: render Jitsi inside a full-page <iframe>
- *      Mobile:  redirect to Jitsi (iframe is unstable on mobile browsers)
+ * Teacher flow:
+ *   1. Fetch LMS session + register presence
+ *   2. Build the shared room URL
+ *   3. window.open(url, "_blank") — opens Jitsi in a NEW TAB outside the iframe
+ *      so the teacher can log in with Google and become moderator reliably.
+ *   4. LMS stays open: teacher sees a control panel with recording + End Class.
+ *      An "Open Classroom in Jitsi" button lets them reopen the tab if needed.
  *
- * Room naming strategy:
- *   wearekids-{classId}-{sessionMinute}
- *   - sessionMinute = session.started_at truncated to the minute (minutes since
- *     Unix epoch).  This makes the room unique per session start so a stale
- *     room from an earlier class doesn't carry over lobby/moderator state.
- *   - Using started_at (not Date.now()) keeps the name identical for every
- *     participant even if they join at different clock times.
+ * Student flow:
+ *   1-2. Same session fetch + presence
+ *   3. Desktop: Jitsi embedded in a full-page iframe
+ *      Mobile:  window.location.href redirect (iframe unstable on mobile)
+ *
+ * Room naming:
+ *   wearekids-{classId-alphanum} — stable for the lifetime of the class so
+ *   every participant joins the exact same room regardless of when they arrive.
+ *   No timestamp suffix: teacher must be present first to unblock the room;
+ *   the stable name ensures students find the same room the teacher opened.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -44,44 +48,27 @@ type Props = {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/** Stable room name — same value for every participant in this class. */
+function jitsiRoomName(classId: string): string {
+  return `wearekids-${classId.replace(/[^a-zA-Z0-9]/g, "")}`;
+}
+
 /**
- * Build a fully-public Jitsi room URL — no JWT, no login required.
+ * Build a fully-public meet.jit.si URL — no JWT, no login required.
  *
- * - prejoinPageEnabled=false  → skip the pre-join lobby
- * - requireDisplayName=false  → skip the "enter your name" screen that looks
- *                               like a login prompt
- * - userInfo.displayName      → pre-fill the name so Jitsi doesn't ask
- *
- * The room name embeds the session's started_at minute so every class start
- * gets a fresh room while all participants still land in the same room.
+ * prejoinPageEnabled=false   — skip the pre-join lobby
+ * requireDisplayName=false   — skip the "enter your name" prompt
+ * userInfo.displayName       — pre-fill name so Jitsi doesn't ask
  */
-function buildJitsiUrl(
-  classId: string,
-  startedAt: string | null | undefined,
-  displayName?: string,
-): string {
-  const safeid = classId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
-
-  // Truncate to the minute so teacher and students share the same room name
-  // even if they navigate to the page a few seconds apart.
-  const minute = startedAt
-    ? Math.floor(new Date(startedAt).getTime() / 60_000)
-    : Math.floor(Date.now() / 60_000);
-
-  const roomName = `wearekids-${safeid}-${minute}`;
-
+function buildJitsiUrl(roomName: string, displayName?: string): string {
   const fragments = [
     "config.prejoinPageEnabled=false",
     "config.requireDisplayName=false",
   ];
-
   if (displayName) {
     fragments.push(`userInfo.displayName=${encodeURIComponent(displayName)}`);
   }
-
-  const url = `https://meet.jit.si/${roomName}#${fragments.join("&")}`;
-  console.log("[Jitsi] Room URL:", url);
-  return url;
+  return `https://meet.jit.si/${roomName}#${fragments.join("&")}`;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -96,6 +83,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   const [canRetry, setCanRetry] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  // jitsiUrl is set for both teacher (for the "open again" button) and student (for iframe src)
   const [jitsiUrl, setJitsiUrl] = useState("");
   const [retryKey, setRetryKey] = useState(0);
 
@@ -186,7 +174,6 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           return await doFetchSession();
         } catch (err) {
           if (err instanceof ApiError && err.status === 401) {
-            // Transient 401 — retry once after 500 ms (bypassed clearSession).
             await new Promise((r) => setTimeout(r, 500));
             if (cancelled) throw err;
             return doFetchSession();
@@ -238,16 +225,43 @@ export function LiveClassroomRoom({ classId, role }: Props) {
 
       if (cancelled) return;
 
-      // ── Step 3: Build public Jitsi URL and launch ──────────────────────
-      const url = buildJitsiUrl(classId, classSession.started_at, currentUser.name);
+      // ── Step 3: Build shared room URL ──────────────────────────────────
+      const roomName = jitsiRoomName(classId);
+      const url = buildJitsiUrl(roomName, currentUser.name);
+      console.log("[Jitsi] Room URL:", url, "| teacher:", isTeacher);
 
-      // Mobile: iframe is not stable — redirect to Jitsi directly
+      // ── Teacher: open in a new tab, stay on LMS control panel ──────────
+      if (isTeacher) {
+        window.open(url, "_blank");
+        setJitsiUrl(url); // stored so "Open Again" button works
+        setIsLoading(false);
+
+        // Poll to redirect back to dashboard when the class ends
+        pollRef.current = setInterval(async () => {
+          try {
+            const resp = await fetch(`${apiBase}/api/v1/classes/${classId}`, {
+              headers: { Authorization: `Bearer ${getAccessToken()}` },
+              cache: "no-store",
+            });
+            if (resp.ok) {
+              const updated = (await resp.json()) as LiveClassSession;
+              if (updated.status === "ended") {
+                void cleanup();
+                router.push(dashboardPath);
+              }
+            }
+          } catch { /* ignore */ }
+        }, 15_000);
+        return;
+      }
+
+      // ── Student: iframe on desktop, redirect on mobile ─────────────────
       const isMobile =
         typeof window !== "undefined" &&
         /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
       if (isMobile) {
-        console.log("[LiveClassroomRoom] Mobile detected — redirecting:", url);
+        console.log("[LiveClassroomRoom] Mobile student — redirecting:", url);
         window.location.href = url;
         return;
       }
@@ -255,7 +269,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
       setJitsiUrl(url);
       setIsLoading(false);
 
-      // ── Step 4: Poll every 15 s — go to dashboard when class ends ──────
+      // Poll every 15 s — redirect when class ends
       pollRef.current = setInterval(async () => {
         try {
           const resp = await fetch(`${apiBase}/api/v1/classes/${classId}`, {
@@ -269,7 +283,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
               router.push(dashboardPath);
             }
           }
-        } catch { /* ignore poll errors */ }
+        } catch { /* ignore */ }
       }, 15_000);
     }
 
@@ -331,17 +345,12 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
-  //
-  //   • Root <div> is position:fixed — immune to mobile address-bar resize.
-  //   • 44px top bar holds title + controls.
-  //   • Jitsi <iframe> fills the rest via position:absolute + top:44.
-  //   • Loading/error overlays use the same absolute layer.
 
   return (
     <div
       style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column", background: "#0f172a" }}
     >
-      {/* ── Top bar ─────────────────────────────────────────────────────── */}
+      {/* ── Top bar (44 px) ─────────────────────────────────────────────── */}
       <div
         style={{ height: 44, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px", background: "rgba(30,41,59,0.97)", zIndex: 10 }}
       >
@@ -395,7 +404,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
         </div>
       </div>
 
-      {/* ── Call area ───────────────────────────────────────────────────── */}
+      {/* ── Main area ───────────────────────────────────────────────────── */}
       <div style={{ position: "absolute", top: 44, left: 0, right: 0, bottom: 0 }}>
 
         {/* Loading state */}
@@ -442,8 +451,50 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           </div>
         )}
 
-        {/* Jitsi iframe — desktop only; mobile redirects via window.location.href */}
-        {jitsiUrl && (
+        {/* ── Teacher: control panel (Jitsi is in a separate tab) ─────────── */}
+        {!isLoading && !error && isTeacher && jitsiUrl && (
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#0f172a", padding: 32 }}>
+            <div style={{ maxWidth: 480, width: "100%", background: "rgba(30,41,59,0.9)", borderRadius: 20, padding: 32, border: "1px solid rgba(52,211,153,0.2)", textAlign: "center" }}>
+
+              {/* Status indicator */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 20 }}>
+                <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#10b981", animation: "pulse 2s infinite", display: "inline-block" }} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#34d399", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                  Classroom Running
+                </span>
+              </div>
+
+              <h2 style={{ fontSize: 20, fontWeight: 700, color: "#f1f5f9", marginBottom: 8 }}>
+                {session?.title ?? "Live Classroom"}
+              </h2>
+              <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 28, lineHeight: 1.6 }}>
+                Your Jitsi classroom opened in a new tab.<br />
+                Keep this page open to use recording controls and end the class.
+              </p>
+
+              {/* Reopen button */}
+              <button
+                type="button"
+                onClick={() => window.open(jitsiUrl, "_blank")}
+                style={{
+                  width: "100%", padding: "12px 20px", borderRadius: 12, fontSize: 14,
+                  fontWeight: 700, cursor: "pointer", border: "none",
+                  background: "linear-gradient(135deg, #10b981, #059669)",
+                  color: "#fff", marginBottom: 12,
+                }}
+              >
+                Open Classroom in Jitsi
+              </button>
+
+              <p style={{ fontSize: 11, color: "#64748b", marginBottom: 0 }}>
+                Teacher opens the room first, then students can join.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ── Student: Jitsi embedded iframe ──────────────────────────────── */}
+        {!isLoading && !error && !isTeacher && jitsiUrl && (
           <iframe
             src={jitsiUrl}
             allow="camera; microphone; display-capture; autoplay; clipboard-write"
