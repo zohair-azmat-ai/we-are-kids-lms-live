@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { IAgoraRTCClient, IAgoraRTCRemoteUser, IRemoteVideoTrack, IRemoteAudioTrack } from "agora-rtc-sdk-ng";
-import { fetchAgoraToken } from "@/lib/api";
+import { getAccessToken } from "@/lib/demo-auth";
 
 // Build-time constant — Next.js inlines NEXT_PUBLIC_* at compile time.
 const APP_ID = (process.env.NEXT_PUBLIC_AGORA_APP_ID || "").trim();
@@ -87,46 +87,21 @@ export default function AgoraClassroom({ classId, onLeave }: AgoraClassroomProps
         console.log("[Agora] Loading SDK...");
         const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
 
-        // --- appId source of truth: module-level APP_ID constant ---
-        const envAppId = APP_ID;
-        console.log("[Agora] APP_ID (build-time) —", {
-          value: envAppId,
-          length: envAppId.length,
-          set: envAppId.length > 0,
+        // Fetch token directly from backend before any join attempt
+        const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").trim().replace(/\/$/, "");
+        const tokenUrl = `${apiBase}/api/v1/agora/token?channel=${encodeURIComponent(channelName)}&uid=${sessionUid}`;
+        console.log("[Agora] Fetching token —", tokenUrl);
+        const accessToken = getAccessToken();
+        const tokenRes = await fetch(tokenUrl, {
+          method: "GET",
+          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
         });
-
-        // Fetch token using the EXACT same uid we will pass to client.join()
-        console.log("[Agora] Requesting token — channel:", channelName, "uid:", sessionUid);
-        const tokenResp = await fetchAgoraToken(channelName, sessionUid);
-        const backendAppId = (tokenResp.appId ?? "").trim();
-        console.log("[Agora] Token response —", {
-          backendAppId,
-          backendAppId_length: backendAppId.length,
-          channel: tokenResp.channel,
-          uid: tokenResp.uid,
-          token_prefix: tokenResp.token.slice(0, 12) + "…",
-        });
-
-        // --- Validate appId sources agree ---
-        if (envAppId.length === 0) {
-          throw new Error(
-            `[Agora] NEXT_PUBLIC_AGORA_APP_ID is empty — set this env var in Vercel/local .env.local`,
-          );
+        if (!tokenRes.ok) {
+          const errText = await tokenRes.text().catch(() => tokenRes.statusText);
+          throw new Error(`[Agora] Token fetch failed ${tokenRes.status}: ${errText}`);
         }
-        if (backendAppId.length === 0) {
-          throw new Error(
-            `[Agora] Backend returned empty appId — check AGORA_APP_ID env var on the backend`,
-          );
-        }
-        if (envAppId !== backendAppId) {
-          throw new Error(
-            `[Agora] appId MISMATCH — env="${envAppId}" (len=${envAppId.length}) vs backend="${backendAppId}" (len=${backendAppId.length})`,
-          );
-        }
-
-        // Single validated appId used for everything below
-        const joinAppId = backendAppId;
-        console.log("[Agora] appId validated — using joinAppId:", joinAppId, "length:", joinAppId.length);
+        const data = await tokenRes.json() as { appId: string; channel: string; token: string; uid: number };
+        console.log("TOKEN DATA:", data);
 
         if (cancelled) return;
 
@@ -181,17 +156,8 @@ export default function AgoraClassroom({ classId, onLeave }: AgoraClassroomProps
           setRemoteUsers((prev) => prev.filter((u) => u.uid !== remoteUser.uid));
         });
 
-        // Join with EXACT validated appId and EXACT uid used to generate the token
         console.log("APP_ID:", APP_ID);
-        console.log("[Agora] Joining —", {
-          joinAppId,
-          joinAppId_length: joinAppId.length,
-          channel: channelName,
-          uid: sessionUid,
-          token_uid_match: tokenResp.uid === sessionUid,
-          channel_match: tokenResp.channel === channelName,
-        });
-        await client.join(joinAppId, channelName, tokenResp.token, sessionUid);
+        await client.join(data.appId, data.channel, data.token, data.uid);
         console.log("[Agora] Joined successfully, uid:", sessionUid);
 
         if (cancelled) {
