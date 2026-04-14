@@ -19,9 +19,8 @@ from app.storage import (
 )
 from app.auth import authenticate_user, create_access_token, get_current_user, hash_password
 from app.config import (
-    JITSI_APP_ID,
-    JITSI_APP_SECRET,
-    JITSI_DOMAIN,
+    AGORA_APP_ID,
+    AGORA_APP_CERTIFICATE,
     OPENAI_API_KEY,
     STRIPE_PRICE_PREMIUM,
     STRIPE_PRICE_STANDARD,
@@ -36,9 +35,9 @@ from app.schemas import (
     AIChatRequest,
     AIChatResponse,
     AIInsightsResponse,
+    AgoraTokenResponse,
     AttendanceRecord,
     AttendanceSummary,
-    JitsiTokenResponse,
     SessionSummaryResponse,
     AuthLoginRequest,
     AuthLoginResponse,
@@ -59,7 +58,6 @@ from app.schemas import (
     EndClassRequest,
     LiveClass,
     LiveSessionSummary,
-    MeetLinkRequest,
     RecordingDeleteResponse,
     RecordingItem,
     RecordingStartRequest,
@@ -108,6 +106,7 @@ from app.services import (
     get_teacher_attendance,
     get_teacher_by_email,
     trigger_session_summary_background,
+    generate_agora_rtc_token,
     get_user_by_email_and_role,
     get_user_by_name_and_role,
     is_student_enrolled_in_class,
@@ -115,7 +114,6 @@ from app.services import (
     normalize_email,
     record_attendance_join,
     require_admin_user,
-    set_meet_link,
     require_plan_capacity,
     serialize_recording,
     update_billing_account_from_subscription,
@@ -341,7 +339,7 @@ def get_test_payload() -> dict:
             "admin",
             "live-classes-ready",
             "postgres-ready",
-            "jitsi-ready",
+            "agora-ready",
             "stripe-billing-ready",
         ],
     }
@@ -590,100 +588,17 @@ def get_class_session(class_id: str, current_user: User = Depends(get_current_us
     return session
 
 
-@api_router.put("/classes/{class_id}/meet-link")
-def save_meet_link(
-    class_id: str,
-    body: MeetLinkRequest,
+@api_router.get("/agora/token", response_model=AgoraTokenResponse)
+def get_agora_token(
+    channel: str,
+    uid: int = 0,
     current_user: User = Depends(get_current_user),
-) -> dict:
-    """Teacher saves the Google Meet link for this class session.
-    Stored in memory — cleared on server restart (acceptable for a live session).
-    """
-    if current_user.role not in {"teacher", "main_teacher", "assistant_teacher"}:
-        raise HTTPException(status_code=403, detail="Only teachers can set the meeting link.")
-    if not body.meet_link.startswith("https://"):
-        raise HTTPException(status_code=400, detail="Meeting link must be a valid HTTPS URL.")
-    set_meet_link(class_id, body.meet_link)
-    return {"success": True, "meet_link": body.meet_link}
-
-
-@api_router.get("/jitsi/token", response_model=JitsiTokenResponse)
-def get_jitsi_token(
-    class_id: str,
-    current_user: User = Depends(get_current_user),
-) -> JitsiTokenResponse:
-    """
-    Issue a signed Jitsi JWT for the requesting user.
-
-    Role mapping:
-      main_teacher  → moderator=True   (full host control: mute, kick, lock)
-      teacher       → moderator=True   (legacy "teacher" role = main teacher)
-      assistant_teacher → moderator=False (participant with presenter access)
-      student       → moderator=False  (standard participant)
-
-    When JITSI_APP_SECRET is not set (dev / public meet.jit.si mode):
-      returns token=None so the frontend opens a plain URL without JWT.
-      No moderator enforcement exists on meet.jit.si regardless.
-
-    When JITSI_APP_SECRET is set (private/self-hosted Jitsi):
-      returns a signed HS256 JWT. The Prosody/Jicofo layer on the private
-      server reads the `context.user.moderator` claim and grants host
-      privileges to main_teacher automatically — no login prompt required.
-    """
-    import re as _re
-    room = f"wearekids{_re.sub(r'[^a-zA-Z0-9]', '', class_id).lower()}"
-
-    # Verify the user has access to this classroom before issuing a token
-    with SessionLocal() as db:
-        classroom = get_class(db, class_id)
-        if not classroom:
-            raise HTTPException(status_code=404, detail="Classroom not found.")
-
-        if current_user.role in {"teacher", "main_teacher", "assistant_teacher"}:
-            # Teachers must be assigned to this class
-            teacher_of_class = (
-                classroom.teacher_id == current_user.id
-                or classroom.teacher and classroom.teacher.email == current_user.email
-            )
-            if not teacher_of_class and current_user.role == "main_teacher":
-                raise HTTPException(status_code=403, detail="Teacher access denied for this class.")
-        elif current_user.role == "student":
-            if not is_student_enrolled_in_class(db, class_id, current_user.id):
-                raise HTTPException(status_code=403, detail="Student not enrolled in this class.")
-        elif current_user.role != "admin":
-            raise HTTPException(status_code=403, detail="Access denied.")
-
-    # Moderator = main_teacher or legacy "teacher" role (they are the host)
-    is_moderator = current_user.role in {"teacher", "main_teacher"}
-
-    token: str | None = None
-    if JITSI_APP_SECRET and JITSI_APP_ID:
-        from jose import jwt as _jose_jwt
-        exp = datetime.now(timezone.utc) + timedelta(hours=4)
-        payload = {
-            # Standard Jitsi JWT claims
-            "aud": "jitsi",
-            "iss": JITSI_APP_ID,
-            "sub": JITSI_DOMAIN,
-            "room": room,
-            "exp": exp,
-            # User context — Prosody reads context.user.moderator
-            "context": {
-                "user": {
-                    "name": current_user.name,
-                    "email": current_user.email,
-                    "moderator": is_moderator,
-                }
-            },
-        }
-        token = _jose_jwt.encode(payload, JITSI_APP_SECRET, algorithm="HS256")
-
-    return JitsiTokenResponse(
-        token=token,
-        room=room,
-        domain=JITSI_DOMAIN,
-        is_moderator=is_moderator,
-    )
+) -> AgoraTokenResponse:
+    """Issue an Agora RTC token for the requesting user."""
+    if not AGORA_APP_ID or not AGORA_APP_CERTIFICATE:
+        raise HTTPException(status_code=503, detail="Agora is not configured.")
+    token = generate_agora_rtc_token(AGORA_APP_ID, AGORA_APP_CERTIFICATE, channel, uid)
+    return AgoraTokenResponse(token=token, app_id=AGORA_APP_ID)
 
 
 @api_router.post("/billing/checkout-session", response_model=BillingCheckoutResponse)

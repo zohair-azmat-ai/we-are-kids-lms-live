@@ -19,11 +19,6 @@ class LiveClass(BaseModel):
     status: SessionStatus
     participants_count: int
     started_at: datetime | None = None
-    meet_link: str | None = None
-
-
-class MeetLinkRequest(BaseModel):
-    meet_link: str
 
 
 class StartClassRequest(BaseModel):
@@ -372,19 +367,6 @@ class SessionSummaryResponse(BaseModel):
     started_at: datetime | None
 
 
-class JitsiTokenResponse(BaseModel):
-    """
-    Jitsi JWT token for a classroom participant.
-
-    token       Signed JWT to append as ?jwt=... to the Jitsi room URL.
-                None when JITSI_APP_SECRET is not configured — frontend
-                falls back to a plain public meet.jit.si room.
-    room        Stable Jitsi room name derived from classId.
-    domain      Jitsi server domain (private or meet.jit.si for dev).
-    is_moderator True for main_teacher — grants host privileges on a
-                private Jitsi server with JWT auth enabled.
-    """
-    token: str | None = None
-    room: str
-    domain: str
-    is_moderator: bool
+class AgoraTokenResponse(BaseModel):
+    token: str
+    app_id: str

@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import api_router, get_public_recording_by_id
 from app.config import (
+    AGORA_APP_ID,
     CORS_ORIGINS,
     ENV,
     OPENAI_API_KEY,
@@ -43,7 +44,7 @@ def read_root() -> dict:
         "port": PORT,
         "docs": "/docs",
         "health": "/health",
-        "jitsi_configured": True,
+        "agora_configured": bool(AGORA_APP_ID),
         "billing_configured": bool(STRIPE_SECRET_KEY),
         "ai_configured": bool(OPENAI_API_KEY),
     }
@@ -57,7 +58,7 @@ def read_health() -> dict:
         "version": "1.0.0",
         "environment": ENV,
         "port": PORT,
-        "jitsi_configured": True,
+        "agora_configured": bool(AGORA_APP_ID),
         "billing_configured": bool(STRIPE_SECRET_KEY),
         "ai_configured": bool(OPENAI_API_KEY),
     }

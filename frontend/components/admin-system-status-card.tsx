@@ -94,7 +94,7 @@ export function AdminSystemStatusCard() {
         <div className="mt-5 grid gap-4 lg:grid-cols-2">
           <StatusPill label="Backend connected" ready={health?.status === "healthy"} />
           <StatusPill label="AI configured" ready={Boolean(health?.ai_configured)} />
-          <StatusPill label="Jitsi Meet" ready={Boolean(health?.jitsi_configured)} />
+          <StatusPill label="Agora RTC" ready={Boolean(health?.agora_configured)} />
           <StatusPill label="Stripe configured" ready={Boolean(health?.billing_configured)} />
           <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">

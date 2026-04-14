@@ -44,7 +44,7 @@ PLAN_FEATURES: dict[BillingPlan, dict[str, object]] = {
         "audience": "Small school",
         "highlights": [
             "Core nursery LMS dashboard",
-            "Jitsi Meet classroom sessions",
+            "Agora RTC live classroom sessions",
             "Basic recordings access",
         ],
     },
@@ -202,24 +202,58 @@ def is_student_enrolled_in_class(db: Session, class_id: str, student_id: str) ->
 
 
 # ── In-memory Google Meet link store ──────────────────────────────────────────
-# Keyed by class_id.  Cleared on server restart — acceptable for live sessions
-# that typically last < 2 hours.  No DB migration required.
-_meet_links: dict[str, str] = {}
+import base64 as _base64
+import hashlib as _hashlib
+import hmac as _hmac
+import secrets as _secrets
+import struct as _struct
+import time as _time
+from zlib import crc32 as _crc32
 
 
-def set_meet_link(class_id: str, meet_link: str) -> None:
-    _meet_links[class_id] = meet_link.strip()
+def _pack_uint16(x: int) -> bytes:
+    return _struct.pack("<H", x)
 
 
-def get_meet_link(class_id: str) -> str | None:
-    return _meet_links.get(class_id)
+def _pack_uint32(x: int) -> bytes:
+    return _struct.pack("<I", x)
+
+
+def _pack_string(s: bytes) -> bytes:
+    return _pack_uint16(len(s)) + s
+
+
+def _pack_map_uint32(m: dict) -> bytes:
+    result = _pack_uint16(len(m))
+    for k in sorted(m):
+        result += _pack_uint16(k) + _pack_uint32(m[k])
+    return result
+
+
+def generate_agora_rtc_token(
+    app_id: str,
+    app_certificate: str,
+    channel_name: str,
+    uid: int,
+    expire_seconds: int = 3600,
+) -> str:
+    uid_str = str(uid)
+    ts = int(_time.time())
+    salt = _secrets.randbelow(100_000) + 1
+    expire_ts = ts + expire_seconds
+    privileges = {1: expire_ts, 2: expire_ts, 3: expire_ts, 4: expire_ts}
+    content = _pack_uint32(ts) + _pack_uint32(salt) + _pack_map_uint32(privileges)
+    val = app_id.encode() + channel_name.encode() + uid_str.encode() + content
+    sig = _hmac.new(app_certificate.encode(), val, _hashlib.sha256).digest()
+    crc_ch = _crc32(channel_name.encode()) & 0xFFFF_FFFF
+    crc_uid = _crc32(uid_str.encode()) & 0xFFFF_FFFF
+    token_content = _pack_string(sig) + _pack_uint32(crc_ch) + _pack_uint32(crc_uid) + _pack_string(content)
+    return "006" + app_id + _base64.b64encode(token_content).decode()
 
 
 def build_live_class_response(classroom: Classroom, session: LiveSession | None) -> LiveClass:
     if not classroom.teacher:
         raise HTTPException(status_code=404, detail="Teacher not found for class.")
-
-    meet_link = _meet_links.get(classroom.id)
 
     if session:
         return LiveClass(
@@ -230,7 +264,6 @@ def build_live_class_response(classroom: Classroom, session: LiveSession | None)
             status=session.status,
             participants_count=session.participants_count,
             started_at=session.started_at,
-            meet_link=meet_link,
         )
 
     return LiveClass(
@@ -241,7 +274,6 @@ def build_live_class_response(classroom: Classroom, session: LiveSession | None)
         status="scheduled",
         participants_count=0,
         started_at=None,
-        meet_link=meet_link,
     )
 
 

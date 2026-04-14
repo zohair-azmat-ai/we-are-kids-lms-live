@@ -14,7 +14,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
-[![Jitsi Meet](https://img.shields.io/badge/Jitsi_Meet-97979A?style=for-the-badge&logo=jitsi&logoColor=white)](https://meet.jit.si)
+[![Agora RTC](https://img.shields.io/badge/Agora_RTC-099DFD?style=for-the-badge&logo=agora&logoColor=white)](https://www.agora.io)
 [![Stripe](https://img.shields.io/badge/Stripe-635BFF?style=for-the-badge&logo=stripe&logoColor=white)](https://stripe.com)
 [![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=for-the-badge&logo=openai&logoColor=white)](https://openai.com)
 [![Neon](https://img.shields.io/badge/Neon_Postgres-00E5A0?style=for-the-badge&logo=postgresql&logoColor=white)](https://neon.tech)
@@ -51,7 +51,7 @@ Explore the full AI-powered LMS with live classrooms, SaaS billing, and analytic
 
 | | What's Real |
 |:---:|:---|
-| 🎥 | **Live video classrooms** — real-time calls via Jitsi Meet WebRTC |
+| 🎥 | **Live video classrooms** — in-app real-time calls via Agora RTC |
 | 💳 | **SaaS billing** — Stripe subscriptions with plan limits enforced at the API layer |
 | 🤖 | **AI assistant + insights** — OpenAI-powered chat and classroom recommendations |
 | 🔐 | **JWT auth** — bcrypt passwords, role-protected routes, token-based sessions |
@@ -70,25 +70,15 @@ Explore the full AI-powered LMS with live classrooms, SaaS billing, and analytic
 
 <br />
 
-**Real-time video classrooms powered by Jitsi Meet WebRTC.**
+**Real-time in-app video classrooms powered by Agora RTC.**
 
 | Step | |
 |:---:|:---|
 | **1** | Teacher clicks **Start Class** — LMS marks the session as LIVE |
-| **2** | Students see the class go live and join with a single click |
-| **3** | Desktop: Jitsi loads inside the LMS UI (iframe) |
-| **4** | Mobile: Jitsi opens full-screen (redirect — iframe is not stable on mobile) |
-| **5** | Teacher becomes moderator (may require Google login on public meet.jit.si) |
-| **6** | Session ends → recording available for playback |
-
----
-
-## ⚠️ Jitsi Limitation
-
-- Free public Jitsi (`meet.jit.si`) may show a 5-minute demo warning on large calls
-- Teacher may need to log in with Google to receive moderator (host) privileges
-- Mobile devices are redirected to the Jitsi app instead of using an embedded iframe
-- For full moderator control without login prompts, a private self-hosted Jitsi server with JWT enabled is needed (the backend endpoint `GET /api/v1/jitsi/token` is already implemented)
+| **2** | Both teacher and students join the same Agora channel inside the LMS |
+| **3** | Video and audio stream directly in the browser — no external tab or app needed |
+| **4** | Mute/unmute mic, hide/show camera controls are built in |
+| **5** | Session ends → recording available for playback |
 
 ---
 
@@ -100,10 +90,10 @@ Explore the full AI-powered LMS with live classrooms, SaaS billing, and analytic
 - Graceful fallback if no OpenAI key is configured
 
 ### 🎥 Live Classes
-- Teacher-initiated Jitsi Meet video rooms
+- Teacher-initiated Agora RTC video rooms — in-app, no external tabs
 - Students join with a single click from their dashboard
-- Desktop: embedded iframe inside LMS UI
-- Mobile: full-screen redirect for stable call experience
+- Camera and microphone controls built into the LMS UI
+- Works on desktop and mobile browsers
 - Post-session recording with 5-day auto-expiry
 
 ### 🏫 LMS Core
@@ -180,7 +170,7 @@ flowchart LR
 
     subgraph Infra
         DB[("🐘 Neon Postgres")]
-        JITSI[("🎥 Jitsi Meet")]
+        AGORA[("🎥 Agora RTC")]
         STRIPE[("💳 Stripe")]
         OPENAI[("🤖 OpenAI")]
     end
@@ -188,7 +178,7 @@ flowchart LR
     A & T & S --> LOGIN --> JWT --> API
     API --> DB
     DASH --> API
-    LIVE --> JITSI
+    LIVE --> AGORA
     AI_UI --> AI_SVC --> OPENAI
     DASH --> STR_SVC --> STRIPE
 ```
@@ -200,7 +190,7 @@ flowchart LR
 | Metric | Detail |
 |:---|:---|
 | User Roles | Admin · Teacher · Student |
-| Live Video | Jitsi Meet (WebRTC, public) |
+| Live Video | Agora RTC (in-app WebRTC) |
 | Authentication | JWT + bcrypt |
 | Database | Neon Postgres · SQLAlchemy 2.0 |
 | Billing | Stripe — tiered plan enforcement |
@@ -219,7 +209,7 @@ flowchart LR
 | Backend | FastAPI 0.115 · Uvicorn |
 | Database | Neon Postgres · SQLAlchemy 2.0 |
 | Auth | JWT · python-jose · bcrypt |
-| Live Video | Jitsi Meet (meet.jit.si) — WebRTC |
+| Live Video | Agora RTC — in-app video |
 | Billing | Stripe 12.0 |
 | AI | OpenAI via ai_service.py |
 | Deployment | Vercel + Hugging Face Spaces (Docker) |
@@ -260,11 +250,10 @@ SECRET_KEY=your_jwt_secret
 CORS_ORIGINS=http://localhost:3000
 ```
 
-Optional — for private self-hosted Jitsi with enforced moderator roles:
+Agora RTC (required for live classrooms):
 ```env
-JITSI_DOMAIN=jitsi.yourdomain.com
-JITSI_APP_ID=your_app_id
-JITSI_APP_SECRET=your_app_secret
+AGORA_APP_ID=your_agora_app_id
+AGORA_APP_CERTIFICATE=your_agora_app_certificate
 ```
 
 ---
@@ -288,7 +277,7 @@ JITSI_APP_SECRET=your_app_secret
 |:---|:---|
 | 🔴 High | Attendance tracking per live session |
 | 🔴 High | Cloud recording storage (S3 / R2) |
-| 🔴 High | Private self-hosted Jitsi for full moderator control |
+| 🔴 High | Agora cloud recording integration |
 | 🟡 Medium | Parent portal with progress reports |
 | 🟡 Medium | Real-time notifications |
 | 🟡 Medium | AI auto-summaries for completed sessions |

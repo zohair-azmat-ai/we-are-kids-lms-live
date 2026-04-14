@@ -14,7 +14,7 @@ export type HealthResponse = {
   version: string;
   environment?: string;
   port?: number;
-  jitsi_configured?: boolean;
+  agora_configured?: boolean;
   billing_configured?: boolean;
   ai_configured?: boolean;
 };
@@ -42,27 +42,14 @@ export type LiveClassSession = {
   status: "live" | "scheduled" | "ended";
   participants_count: number;
   started_at?: string | null;
-  meet_link?: string | null;
 };
 
 /** Classroom participant role — used for presence join/leave. */
 export type ClassroomParticipantRole = "teacher" | "student";
 
-/**
- * Response from GET /api/v1/jitsi/token
- *
- * token        Signed HS256 JWT. Append as ?jwt={token} to the Jitsi room URL.
- *              null when JITSI_APP_SECRET is not configured on the server —
- *              frontend falls back to a plain public-room URL.
- * room         Stable room name: wearekids{classId-alphanum}
- * domain       Jitsi server domain (private server or meet.jit.si for dev)
- * is_moderator True for main_teacher — enforced as host on a private server.
- */
-export type JitsiTokenResponse = {
-  token: string | null;
-  room: string;
-  domain: string;
-  is_moderator: boolean;
+export type AgoraTokenResponse = {
+  token: string;
+  app_id: string;
 };
 
 export type RecordingItem = {
@@ -616,38 +603,12 @@ export async function fetchClassSession(
   );
 }
 
-/**
- * Fetch a signed Jitsi JWT from the backend.
- *
- * The token encodes the user's role (moderator for main_teacher, participant
- * for everyone else) and is signed with JITSI_APP_SECRET on the server.
- * Append it to the Jitsi room URL as ?jwt={token} so the private server
- * can enforce host privileges without a manual login prompt.
- *
- * Returns token=null when the backend is not configured with JITSI_APP_SECRET
- * (dev / public meet.jit.si mode) — the frontend falls back to a plain URL.
- */
-export async function fetchJitsiToken(classId: string): Promise<JitsiTokenResponse> {
-  return requestJson<JitsiTokenResponse>(
-    `/api/v1/jitsi/token?class_id=${encodeURIComponent(classId)}`,
+export async function fetchAgoraToken(channel: string, uid = 0): Promise<AgoraTokenResponse> {
+  return requestJson<AgoraTokenResponse>(
+    `/api/v1/agora/token?channel=${encodeURIComponent(channel)}&uid=${uid}`,
     { method: "GET" },
-    "Unable to prepare classroom token.",
+    "Unable to fetch Agora token.",
   );
-}
-
-/** Save the Google Meet link for a class so students can join it. */
-export async function saveMeetLink(classId: string, meetLink: string): Promise<void> {
-  await requestJson<{ success: boolean }>(
-    `/api/v1/classes/${encodeURIComponent(classId)}/meet-link`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ meet_link: meetLink }),
-    },
-    "Unable to save meeting link.",
-  );
-  invalidateCacheByPrefix(`class-session:${classId}`);
-  invalidateCacheByPrefix("live-classes");
 }
 
 export async function startRecordingSession(params: {
