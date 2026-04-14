@@ -49,7 +49,7 @@ export type ClassroomParticipantRole = "teacher" | "student";
 
 export type AgoraTokenResponse = {
   token: string;
-  app_id: string;
+  appId: string;
   channel: string;
   uid: number;
 };

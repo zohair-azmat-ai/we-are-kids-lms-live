@@ -369,6 +369,6 @@ class SessionSummaryResponse(BaseModel):
 
 class AgoraTokenResponse(BaseModel):
     token: str
-    app_id: str
+    appId: str
     channel: str
     uid: int

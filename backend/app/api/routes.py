@@ -607,7 +607,7 @@ def get_agora_token(
     expire_seconds = 3600
     token = generate_agora_rtc_token(AGORA_APP_ID, AGORA_APP_CERTIFICATE, channel, uid, expire_seconds)
     logger.info("[Agora] token issued — channel=%r uid=%d expire=%ds", channel, uid, expire_seconds)
-    return AgoraTokenResponse(token=token, app_id=AGORA_APP_ID, channel=channel, uid=uid)
+    return AgoraTokenResponse(token=token, appId=AGORA_APP_ID, channel=channel, uid=uid)
 
 
 @api_router.post("/billing/checkout-session", response_model=BillingCheckoutResponse)

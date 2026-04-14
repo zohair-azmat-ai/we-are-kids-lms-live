@@ -88,7 +88,7 @@ export default function AgoraClassroom({ classId, onLeave }: AgoraClassroomProps
         console.log("[Agora] Requesting token — channel:", channelName, "uid:", sessionUid);
         const tokenResp = await fetchAgoraToken(channelName, sessionUid);
         console.log("[Agora] Token response —", {
-          app_id: tokenResp.app_id,
+          appId: tokenResp.appId,
           channel: tokenResp.channel,
           uid: tokenResp.uid,
           token_prefix: tokenResp.token.slice(0, 12) + "…",
@@ -147,15 +147,15 @@ export default function AgoraClassroom({ classId, onLeave }: AgoraClassroomProps
           setRemoteUsers((prev) => prev.filter((u) => u.uid !== remoteUser.uid));
         });
 
-        // Join with EXACT app_id from token response and EXACT uid used to generate the token
+        // Join with EXACT appId from token response and EXACT uid used to generate the token
         console.log("[Agora] Joining —", {
-          app_id: tokenResp.app_id,
+          appId: tokenResp.appId,
           channel: channelName,
           uid: sessionUid,
           token_uid_match: tokenResp.uid === sessionUid,
           channel_match: tokenResp.channel === channelName,
         });
-        await client.join(tokenResp.app_id, channelName, tokenResp.token, sessionUid);
+        await client.join(tokenResp.appId, channelName, tokenResp.token, sessionUid);
         console.log("[Agora] Joined successfully, uid:", sessionUid);
 
         if (cancelled) {
