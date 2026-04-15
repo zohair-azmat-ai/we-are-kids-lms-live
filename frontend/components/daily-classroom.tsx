@@ -46,14 +46,10 @@ export default function DailyClassroom({ roomUrl, token, userName, onLeave }: Da
           if (!destroyed) onLeave?.();
         });
 
-        frame.on("error" as DailyEvent, (evt: unknown) => {
-          if (!destroyed) {
-            const msg =
-              evt !== null && typeof evt === "object" && "errorMsg" in evt && typeof (evt as Record<string, unknown>).errorMsg === "string"
-                ? (evt as Record<string, unknown>).errorMsg as string
-                : "Video call error.";
-            setError(msg);
-          }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        frame.on("error", (evt: any) => {
+          const message = evt && evt.errorMsg ? evt.errorMsg : "Video call error.";
+          if (!destroyed) setError(message);
         });
 
         frame.on("joined-meeting" as DailyEvent, () => {
