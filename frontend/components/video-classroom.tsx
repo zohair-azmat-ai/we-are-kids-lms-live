@@ -21,6 +21,79 @@ interface VideoClassroomProps {
   onLeave?: () => void;
 }
 
+// ─── Spinner helper ───────────────────────────────────────────────────────────
+
+function Spinner() {
+  return (
+    <div
+      style={{
+        width: 36,
+        height: 36,
+        borderRadius: "50%",
+        border: "3px solid #10b981",
+        borderTopColor: "transparent",
+        animation: "spin 0.8s linear infinite",
+        margin: "0 auto 12px",
+      }}
+    />
+  );
+}
+
+// ─── Centered status/error screen ────────────────────────────────────────────
+
+function StatusScreen({
+  spinning,
+  message,
+  isError,
+  onLeave,
+}: {
+  spinning: boolean;
+  message: string;
+  isError?: boolean;
+  onLeave?: () => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        height: "100%",
+        background: "#0f172a",
+      }}
+    >
+      <div style={{ textAlign: "center", padding: 32, maxWidth: 420 }}>
+        {spinning && <Spinner />}
+        <p
+          style={{
+            fontSize: 13,
+            color: isError ? "#f87171" : "#94a3b8",
+            marginBottom: isError ? 20 : 0,
+          }}
+        >
+          {message}
+        </p>
+        {isError && onLeave && (
+          <button
+            onClick={onLeave}
+            style={{
+              padding: "8px 24px",
+              borderRadius: 8,
+              background: "#475569",
+              color: "#fff",
+              border: "none",
+              cursor: "pointer",
+              fontSize: 13,
+            }}
+          >
+            Leave
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Video tile for a single peer ────────────────────────────────────────────
 
 function VideoTile({ peer }: { peer: HMSPeer }) {
@@ -56,7 +129,12 @@ function VideoTile({ peer }: { peer: HMSPeer }) {
         autoPlay
         muted={peer.isLocal}
         playsInline
-        style={{ width: "100%", height: "100%", objectFit: "cover", display: videoOn ? "block" : "none" }}
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+          display: videoOn ? "block" : "none",
+        }}
       />
       {!videoOn && (
         <div
@@ -106,6 +184,8 @@ function VideoTile({ peer }: { peer: HMSPeer }) {
 
 // ─── Inner call component — must live inside HMSRoomProvider ─────────────────
 
+const JOIN_TIMEOUT_MS = 15_000;
+
 function VideoCall({
   token,
   userName,
@@ -121,16 +201,51 @@ function VideoCall({
   const isAudioEnabled = useHMSStore(selectIsLocalAudioEnabled);
   const isVideoEnabled = useHMSStore(selectIsLocalVideoEnabled);
 
+  const [joinStatus, setJoinStatus] = useState<"joining" | "connected" | "failed">("joining");
+  const [joinError, setJoinError] = useState<string | null>(null);
+
+  // Track connection via HMS store — update joinStatus once connected
   useEffect(() => {
+    if (isConnected) {
+      console.log("[VideoClassroom] 100ms join succeeded. Peers:", peers.length);
+      setJoinStatus("connected");
+    }
+  }, [isConnected, peers.length]);
+
+  // Initiate join
+  useEffect(() => {
+    console.log("[VideoClassroom] Starting 100ms join. userName:", userName);
+
+    // 15s timeout guard
+    const timeoutId = setTimeout(() => {
+      if (joinStatus === "joining") {
+        console.error("[VideoClassroom] 100ms join timeout after 15s");
+        setJoinError("100ms join timeout — room did not connect within 15 seconds.");
+        setJoinStatus("failed");
+      }
+    }, JOIN_TIMEOUT_MS);
+
     hmsActions
       .join({
         authToken: token,
         userName,
-        settings: { isAudioMuted: false, isVideoMuted: false },
+        // Start muted so camera/mic permission denial doesn't block join
+        settings: { isAudioMuted: true, isVideoMuted: true },
       })
-      .catch(console.error);
+      .then(() => {
+        console.log("[VideoClassroom] hmsActions.join() resolved.");
+        clearTimeout(timeoutId);
+      })
+      .catch((err: unknown) => {
+        clearTimeout(timeoutId);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("[VideoClassroom] 100ms join failed:", err);
+        setJoinError(`Failed: ${msg}`);
+        setJoinStatus("failed");
+      });
 
     return () => {
+      clearTimeout(timeoutId);
       hmsActions.leave().catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -141,33 +256,19 @@ function VideoCall({
     onLeave?.();
   }
 
-  if (!isConnected) {
+  if (joinStatus === "failed") {
     return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "100%",
-          background: "#0f172a",
-        }}
-      >
-        <div style={{ textAlign: "center" }}>
-          <div
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: "50%",
-              border: "3px solid #10b981",
-              borderTopColor: "transparent",
-              animation: "spin 0.8s linear infinite",
-              margin: "0 auto 12px",
-            }}
-          />
-          <p style={{ fontSize: 13, color: "#94a3b8" }}>Connecting to classroom…</p>
-        </div>
-      </div>
+      <StatusScreen
+        spinning={false}
+        message={joinError ?? "Failed to connect to classroom."}
+        isError
+        onLeave={onLeave}
+      />
     );
+  }
+
+  if (joinStatus === "joining" || !isConnected) {
+    return <StatusScreen spinning message="Joining room…" />;
   }
 
   const cols =
@@ -266,15 +367,22 @@ export default function VideoClassroom({
   onLeave,
 }: VideoClassroomProps) {
   const [token, setToken] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [fetchStatus, setFetchStatus] = useState<"fetching" | "done" | "error">("fetching");
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     async function fetchToken() {
+      console.log("[VideoClassroom] Fetching HMS token for classId:", classId);
+      setFetchStatus("fetching");
+
       try {
         const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").trim().replace(/\/$/, "");
         const accessToken = getAccessToken();
+
+        console.log("[VideoClassroom] API base:", apiBase);
+
         const res = await fetch(`${apiBase}/api/v1/hms/token`, {
           method: "POST",
           headers: {
@@ -283,82 +391,55 @@ export default function VideoClassroom({
           },
           body: JSON.stringify({ class_id: classId, is_teacher: isTeacher ?? false }),
         });
-        const data = (await res.json()) as { token?: string; detail?: string };
-        if (!res.ok) throw new Error(data.detail ?? "Failed to get classroom token");
-        if (!cancelled && data.token) setToken(data.token);
+
+        const text = await res.text();
+        console.log("[VideoClassroom] HMS token response status:", res.status, "body:", text);
+
+        let data: { token?: string; detail?: string };
+        try {
+          data = JSON.parse(text) as { token?: string; detail?: string };
+        } catch {
+          throw new Error(`Backend returned non-JSON: ${text.slice(0, 200)}`);
+        }
+
+        if (!res.ok) throw new Error(data.detail ?? `Backend error ${res.status}`);
+        if (!data.token) throw new Error("Backend returned no token field");
+
+        if (!cancelled) {
+          console.log("[VideoClassroom] Token fetch succeeded.");
+          setToken(data.token);
+          setFetchStatus("done");
+        }
       } catch (err: unknown) {
         if (!cancelled) {
           const msg = err instanceof Error ? err.message : "Failed to set up classroom";
-          console.error("[VideoClassroom] token fetch error:", err);
-          setError(msg);
+          console.error("[VideoClassroom] Token fetch error:", err);
+          setFetchError(msg);
+          setFetchStatus("error");
         }
       }
     }
 
     void fetchToken();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [classId]);
 
-  if (error) {
+  if (fetchStatus === "error") {
     return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "100%",
-          background: "#0f172a",
-        }}
-      >
-        <div style={{ textAlign: "center", padding: 32, maxWidth: 400 }}>
-          <p style={{ color: "#f87171", fontSize: 14, marginBottom: 20 }}>{error}</p>
-          <button
-            onClick={onLeave}
-            style={{
-              padding: "8px 24px",
-              borderRadius: 8,
-              background: "#475569",
-              color: "#fff",
-              border: "none",
-              cursor: "pointer",
-              fontSize: 13,
-            }}
-          >
-            Leave
-          </button>
-        </div>
-      </div>
+      <StatusScreen
+        spinning={false}
+        message={fetchError ?? "Failed to set up classroom."}
+        isError
+        onLeave={onLeave}
+      />
     );
   }
 
-  if (!token) {
-    return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "100%",
-          background: "#0f172a",
-        }}
-      >
-        <div style={{ textAlign: "center" }}>
-          <div
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: "50%",
-              border: "3px solid #10b981",
-              borderTopColor: "transparent",
-              animation: "spin 0.8s linear infinite",
-              margin: "0 auto 12px",
-            }}
-          />
-          <p style={{ fontSize: 13, color: "#94a3b8" }}>Setting up classroom…</p>
-        </div>
-      </div>
-    );
+  if (fetchStatus === "fetching" || !token) {
+    return <StatusScreen spinning message="Fetching token…" />;
   }
 
   return (
