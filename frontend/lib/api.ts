@@ -611,17 +611,6 @@ export async function fetchClassSession(
   );
 }
 
-export async function fetchDailyRoom(classId: string, isOwner: boolean): Promise<DailyRoomResponse> {
-  return requestJson<DailyRoomResponse>(
-    "/api/v1/daily/room",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ class_id: classId, is_owner: isOwner }),
-    },
-    "Unable to set up video room.",
-  );
-}
 
 export async function startRecordingSession(params: {
   classId: string;

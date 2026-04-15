@@ -383,3 +383,13 @@ class DailyRoomResponse(BaseModel):
     url: str
     token: str
     room_name: str
+
+
+class HMSTokenRequest(BaseModel):
+    class_id: str
+    is_teacher: bool = False
+
+
+class HMSTokenResponse(BaseModel):
+    token: str
+    room_id: str

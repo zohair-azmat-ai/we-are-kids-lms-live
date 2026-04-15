@@ -10,6 +10,7 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
+    "@100mslive/react-sdk": "^0.11.2",
     "@daily-co/daily-js": "^0.89.1",
     "framer-motion": "^12.38.0",
     "next": "14.2.24",
