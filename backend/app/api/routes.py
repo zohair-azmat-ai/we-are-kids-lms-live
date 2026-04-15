@@ -661,17 +661,8 @@ def create_daily_room(
                 err_data = {"error": exc.reason}
             return exc.code, err_data
 
-    # Create room — 409 means it already exists, fetch it via GET instead
-    create_status, create_data = _daily("POST", "/rooms", {
-        "name": room_name,
-        "privacy": "private",
-        "properties": {
-            "enable_screenshare": True,
-            "enable_chat": True,
-            "start_video_off": False,
-            "start_audio_off": False,
-        },
-    })
+    # Create room with minimal payload — 409 means it already exists
+    create_status, create_data = _daily("POST", "/rooms", {"name": room_name})
     logger.info("[Daily] create room status=%d room=%r", create_status, room_name)
 
     if create_status == 200:
