@@ -768,7 +768,7 @@ def create_hms_token(
             "jti": str(_uuid.uuid4()),
         }
         mgmt_token = _jwt.encode(mgmt_payload, HMS_APP_SECRET, algorithm="HS256")
-        logger.info("[HMS] management token generated")
+        logger.info("[HMS] management token generated: yes (length=%d)", len(mgmt_token))
 
         # Sanitise class_id → valid 100ms room name (letters, digits, hyphens, max 100)
         raw_name = f"class-{payload.class_id}"
@@ -777,24 +777,30 @@ def create_hms_token(
         def _hms_api(method, path, body=None):
             """Call 100ms Management API. Returns (status_code, response_dict)."""
             url = f"https://api.100ms.live/v2{path}"
+            auth_header = f"Bearer {mgmt_token}"
             data = _json.dumps(body).encode() if body is not None else None
+            logger.info("[HMS] API request: %s %s | auth header attached: yes", method, url)
             req = _urllib_request.Request(
                 url,
                 data=data,
                 headers={
-                    "Authorization": f"Management {mgmt_token}",
+                    "Authorization": auth_header,
                     "Content-Type": "application/json",
                 },
                 method=method,
             )
             try:
                 with _urllib_request.urlopen(req, timeout=10) as resp:
-                    return resp.status, _json.loads(resp.read())
+                    resp_body = resp.read()
+                    logger.info("[HMS] API response: status=%d", resp.status)
+                    return resp.status, _json.loads(resp_body)
             except _urllib_error.HTTPError as exc:
+                raw = exc.read()
+                logger.error("[HMS] API error: status=%d body=%s", exc.code, raw.decode(errors="replace")[:500])
                 try:
-                    err_body = _json.loads(exc.read())
+                    err_body = _json.loads(raw)
                 except Exception:
-                    err_body = {}
+                    err_body = {"raw": raw.decode(errors="replace")}
                 return exc.code, err_body
 
         # Try to create the room
