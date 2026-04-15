@@ -196,32 +196,53 @@ function VideoCall({
   onLeave?: () => void;
 }) {
   const hmsActions = useHMSActions();
+  // isConnected is the single source of truth for whether to show the room
   const isConnected = useHMSStore(selectIsConnectedToRoom);
   const peers = useHMSStore(selectPeers);
   const isAudioEnabled = useHMSStore(selectIsLocalAudioEnabled);
   const isVideoEnabled = useHMSStore(selectIsLocalVideoEnabled);
 
-  const [joinStatus, setJoinStatus] = useState<"joining" | "connected" | "failed">("joining");
-  const [joinError, setJoinError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [joiningText, setJoiningText] = useState("Joining room…");
 
-  // Track connection via HMS store — update joinStatus once connected
+  // Ref guard: prevents double-join in React StrictMode (effects run twice in dev)
+  const hasJoinedRef = useRef(false);
+  // Ref mirror of isConnected: lets the timeout callback read current value
+  // without a stale closure (the timeout effect only runs once, on [token] change)
+  const isConnectedRef = useRef(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Keep isConnectedRef current and clear the timeout once we're in
   useEffect(() => {
+    isConnectedRef.current = isConnected;
     if (isConnected) {
-      console.log("[VideoClassroom] 100ms join succeeded. Peers:", peers.length);
-      setJoinStatus("connected");
+      console.log("[VideoClassroom] isConnected=true — peers:", peers.length);
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
     }
   }, [isConnected, peers.length]);
 
-  // Initiate join
+  // Initiate join — runs once per token, guarded against StrictMode double-run
   useEffect(() => {
-    console.log("[VideoClassroom] Starting 100ms join. userName:", userName);
+    if (hasJoinedRef.current) {
+      console.log("[VideoClassroom] Join already initiated — skipping duplicate (StrictMode).");
+      return;
+    }
+    hasJoinedRef.current = true;
 
-    // 15s timeout guard
-    const timeoutId = setTimeout(() => {
-      if (joinStatus === "joining") {
-        console.error("[VideoClassroom] 100ms join timeout after 15s");
-        setJoinError("100ms join timeout — room did not connect within 15 seconds.");
-        setJoinStatus("failed");
+    console.log(
+      "[VideoClassroom] Starting join. userName:", userName,
+      "token prefix:", token.slice(0, 30) + "…",
+    );
+    setJoiningText("Joining room…");
+
+    // Timeout uses isConnectedRef (not closure over state) to avoid stale reads
+    timeoutRef.current = setTimeout(() => {
+      if (!isConnectedRef.current) {
+        console.error("[VideoClassroom] join timeout after 15s — not connected");
+        setError("100ms join timeout — room did not connect within 15 seconds.");
       }
     }, JOIN_TIMEOUT_MS);
 
@@ -229,24 +250,36 @@ function VideoCall({
       .join({
         authToken: token,
         userName,
-        // Start muted so camera/mic permission denial doesn't block join
+        // Start muted — camera/mic permission denial must NOT block room entry
         settings: { isAudioMuted: true, isVideoMuted: true },
       })
       .then(() => {
-        console.log("[VideoClassroom] hmsActions.join() resolved.");
-        clearTimeout(timeoutId);
+        console.log("[VideoClassroom] hmsActions.join() resolved — waiting for store update");
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+          timeoutRef.current = null;
+        }
+        setJoiningText("Connected");
       })
       .catch((err: unknown) => {
-        clearTimeout(timeoutId);
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+          timeoutRef.current = null;
+        }
         const msg = err instanceof Error ? err.message : String(err);
-        console.error("[VideoClassroom] 100ms join failed:", err);
-        setJoinError(`Failed: ${msg}`);
-        setJoinStatus("failed");
+        console.error("[VideoClassroom] hmsActions.join() rejected:", msg, err);
+        setError(`Join failed: ${msg}`);
       });
 
+    // IMPORTANT: do NOT call hmsActions.leave() here.
+    // In React StrictMode dev, cleanup runs between the two effect invocations.
+    // Calling leave() would cancel the in-progress join and leave the SDK in a
+    // broken state for the second invocation. HMSRoomProvider cleans up on unmount.
     return () => {
-      clearTimeout(timeoutId);
-      hmsActions.leave().catch(() => {});
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
@@ -256,20 +289,27 @@ function VideoCall({
     onLeave?.();
   }
 
-  if (joinStatus === "failed") {
+  // ── Error state ───────────────────────────────────────────────────────────
+  if (error) {
     return (
       <StatusScreen
         spinning={false}
-        message={joinError ?? "Failed to connect to classroom."}
+        message={error}
         isError
         onLeave={onLeave}
       />
     );
   }
 
-  if (joinStatus === "joining" || !isConnected) {
-    return <StatusScreen spinning message="Joining room…" />;
+  // ── Not yet connected — show current join phase ───────────────────────────
+  // Use isConnected (HMS store) as the single gate — no secondary joinStatus
+  // state that can lag behind and cause an extra render cycle of stuck spinner.
+  if (!isConnected) {
+    return <StatusScreen spinning message={joiningText} />;
   }
+
+  // ── Connected — render the room ───────────────────────────────────────────
+  console.log("[VideoClassroom] Rendering room. Peers:", peers.length);
 
   const cols =
     peers.length <= 1 ? "1fr" : peers.length === 2 ? "repeat(2, 1fr)" : "repeat(3, 1fr)";
@@ -374,13 +414,12 @@ export default function VideoClassroom({
     let cancelled = false;
 
     async function fetchToken() {
-      console.log("[VideoClassroom] Fetching HMS token for classId:", classId);
+      console.log("[VideoClassroom] Fetching HMS token. classId:", classId, "isTeacher:", isTeacher);
       setFetchStatus("fetching");
 
       try {
         const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").trim().replace(/\/$/, "");
         const accessToken = getAccessToken();
-
         console.log("[VideoClassroom] API base:", apiBase);
 
         const res = await fetch(`${apiBase}/api/v1/hms/token`, {
@@ -392,21 +431,22 @@ export default function VideoClassroom({
           body: JSON.stringify({ class_id: classId, is_teacher: isTeacher ?? false }),
         });
 
+        // Read as text first so non-JSON backend errors show a useful message
         const text = await res.text();
-        console.log("[VideoClassroom] HMS token response status:", res.status, "body:", text);
+        console.log("[VideoClassroom] Token response status:", res.status, "body:", text.slice(0, 300));
 
         let data: { token?: string; detail?: string };
         try {
           data = JSON.parse(text) as { token?: string; detail?: string };
         } catch {
-          throw new Error(`Backend returned non-JSON: ${text.slice(0, 200)}`);
+          throw new Error(`Backend returned non-JSON (${res.status}): ${text.slice(0, 200)}`);
         }
 
         if (!res.ok) throw new Error(data.detail ?? `Backend error ${res.status}`);
-        if (!data.token) throw new Error("Backend returned no token field");
+        if (!data.token) throw new Error("Backend response missing token field");
 
         if (!cancelled) {
-          console.log("[VideoClassroom] Token fetch succeeded.");
+          console.log("[VideoClassroom] Token fetch succeeded. Token prefix:", data.token.slice(0, 30) + "…");
           setToken(data.token);
           setFetchStatus("done");
         }
@@ -421,9 +461,7 @@ export default function VideoClassroom({
     }
 
     void fetchToken();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [classId]);
 
