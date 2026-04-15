@@ -64,9 +64,17 @@ export default function DailyClassroom({ roomUrl, token, userName, onLeave }: Da
         });
       } catch (err: unknown) {
         if (!destroyed) {
-          const msg = err instanceof Error ? err.message : String(err);
           console.error("[Daily] join error:", err);
-          setError(msg || "Failed to join video call.");
+          let msg = "Video call join failed.";
+          if (err !== null && typeof err === "object") {
+            const e = err as Record<string, unknown>;
+            if (typeof e.errorMsg === "string" && e.errorMsg) msg = e.errorMsg;
+            else if (typeof e.message === "string" && e.message) msg = e.message;
+            else msg = JSON.stringify(err);
+          } else if (typeof err === "string" && err) {
+            msg = err;
+          }
+          setError(msg);
         }
       }
     }
