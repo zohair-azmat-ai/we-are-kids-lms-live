@@ -171,7 +171,7 @@ function ChatPanel({
         position: "fixed",
         left: 0,
         right: 0,
-        bottom: 48, // above controls bar
+        bottom: 52, // above controls bar (~51px tall)
         height: "58vh",
         zIndex: 50,
         background: "#0f172a",
@@ -236,7 +236,7 @@ function ChatPanel({
                     wordBreak: "break-word",
                   }}
                 >
-                  {msg.message}
+                  {String(msg.message)}
                 </div>
               </div>
             );
@@ -337,9 +337,14 @@ function VideoCall({ token, userName, onLeave }: { token: string; userName: stri
     }
   }, [peers, focusedPeerId]);
 
-  // Track unread messages when chat is closed
+  // Track unread messages — keep ref current while open, count new arrivals while closed
   useEffect(() => {
-    if (!isChatOpen) {
+    if (isChatOpen) {
+      // Chat is visible — everything is "seen"; keep ref current so closing won't
+      // count messages the user already watched as unread.
+      lastSeenMsgCountRef.current = hmsMessages.length;
+      setUnreadCount(0);
+    } else {
       const newUnread = hmsMessages.length - lastSeenMsgCountRef.current;
       if (newUnread > 0) {
         setUnreadCount(newUnread);
