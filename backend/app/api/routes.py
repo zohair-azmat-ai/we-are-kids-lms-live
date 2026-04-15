@@ -637,46 +637,59 @@ def create_daily_room(
         raise HTTPException(status_code=503, detail="Daily.co is not configured.")
 
     room_name = "wearekids" + _re.sub(r"[^a-zA-Z0-9]", "", payload.class_id)
-    headers = {
+    auth_headers = {
         "Authorization": f"Bearer {DAILY_API_KEY}",
         "Content-Type": "application/json",
     }
 
-    def _daily(method: str, path: str, body: dict | None = None) -> dict:
+    def _daily(method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
+        """Call Daily REST API. Returns (status_code, parsed_json)."""
         data = _json.dumps(body).encode() if body else None
         req = _ureq.Request(
             f"https://api.daily.co/v1{path}",
             data=data,
-            headers=headers,
+            headers=auth_headers,
             method=method,
         )
         try:
             with _ureq.urlopen(req, timeout=10) as resp:
-                return _json.loads(resp.read())
+                return resp.status, _json.loads(resp.read())
         except _uerr.HTTPError as exc:
-            body_text = exc.read().decode()
-            return {"_status": exc.code, "_body": body_text}
+            try:
+                err_data = _json.loads(exc.read())
+            except Exception:
+                err_data = {"error": exc.reason}
+            return exc.code, err_data
 
-    # Create room — 409 means it already exists, which is fine
-    exp = int(_time.time()) + 7200
-    room_resp = _daily("POST", "/rooms", {
+    # Create room — 409 means it already exists, fetch it via GET instead
+    create_status, create_data = _daily("POST", "/rooms", {
         "name": room_name,
         "privacy": "private",
         "properties": {
-            "exp": exp,
             "enable_screenshare": True,
             "enable_chat": True,
             "start_video_off": False,
             "start_audio_off": False,
         },
     })
-    status = room_resp.get("_status")
-    if status and status not in (200, 409):
-        logger.error("[Daily] room create failed: %s — %s", status, room_resp.get("_body", ""))
-        raise HTTPException(status_code=502, detail="Failed to create Daily room.")
+    logger.info("[Daily] create room status=%d room=%r", create_status, room_name)
+
+    if create_status == 200:
+        room_url = create_data["url"]
+    elif create_status == 409:
+        # Room already exists — GET it to retrieve the correct URL
+        get_status, get_data = _daily("GET", f"/rooms/{room_name}")
+        if get_status != 200:
+            logger.error("[Daily] get room failed: %d — %s", get_status, get_data)
+            raise HTTPException(status_code=502, detail=f"Daily room exists but could not be fetched: {get_data.get('error', get_status)}")
+        room_url = get_data["url"]
+    else:
+        logger.error("[Daily] room create failed: %d — %s", create_status, create_data)
+        raise HTTPException(status_code=502, detail=f"Failed to create Daily room: {create_data.get('error', create_status)}")
 
     # Generate meeting token
-    token_resp = _daily("POST", "/meeting-tokens", {
+    exp = int(_time.time()) + 7200
+    token_status, token_data = _daily("POST", "/meeting-tokens", {
         "properties": {
             "room_name": room_name,
             "is_owner": payload.is_owner,
@@ -684,13 +697,12 @@ def create_daily_room(
             "user_name": current_user.name,
         },
     })
-    if "_status" in token_resp:
-        logger.error("[Daily] token create failed: %s — %s", token_resp["_status"], token_resp.get("_body", ""))
-        raise HTTPException(status_code=502, detail="Failed to create Daily meeting token.")
+    if token_status != 200:
+        logger.error("[Daily] token create failed: %d — %s", token_status, token_data)
+        raise HTTPException(status_code=502, detail=f"Failed to create Daily token: {token_data.get('error', token_status)}")
 
-    meeting_token = token_resp.get("token", "")
-    room_url = f"https://wearekids.daily.co/{room_name}"
-    logger.info("[Daily] room ready — room=%r is_owner=%s user=%r", room_name, payload.is_owner, current_user.email)
+    meeting_token = token_data["token"]
+    logger.info("[Daily] room ready — room=%r url=%r is_owner=%s user=%r", room_name, room_url, payload.is_owner, current_user.email)
     return DailyRoomResponse(url=room_url, token=meeting_token, room_name=room_name)
 
 
