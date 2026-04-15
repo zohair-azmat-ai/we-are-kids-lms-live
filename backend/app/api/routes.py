@@ -661,22 +661,29 @@ def create_daily_room(
                 err_data = {"error": exc.reason}
             return exc.code, err_data
 
-    # Create room with minimal payload — 409 means it already exists
+    # Create room with minimal payload
     create_status, create_data = _daily("POST", "/rooms", {"name": room_name})
-    logger.info("[Daily] create room status=%d room=%r", create_status, room_name)
+    logger.info("[Daily] create room status=%d body=%s room=%r", create_status, create_data, room_name)
+
+    # Daily returns 400 with "already exists" info when the room name is taken.
+    # It also sometimes returns 409. Both cases mean we should GET the existing room.
+    def _room_already_exists() -> bool:
+        info = str(create_data.get("info", ""))
+        return "already exists" in info
 
     if create_status == 200:
         room_url = create_data["url"]
-    elif create_status == 409:
-        # Room already exists — GET it to retrieve the correct URL
+    elif create_status == 409 or (create_status == 400 and _room_already_exists()):
+        # Room already exists — GET it to retrieve the real URL from Daily's servers
         get_status, get_data = _daily("GET", f"/rooms/{room_name}")
+        logger.info("[Daily] GET existing room status=%d body=%s", get_status, get_data)
         if get_status != 200:
             logger.error("[Daily] get room failed: %d — %s", get_status, get_data)
             raise HTTPException(status_code=502, detail=f"Daily room exists but could not be fetched: {get_data.get('error', get_status)}")
         room_url = get_data["url"]
     else:
         logger.error("[Daily] room create failed: %d — %s", create_status, create_data)
-        raise HTTPException(status_code=502, detail=f"Failed to create Daily room: {create_data.get('error', create_status)}")
+        raise HTTPException(status_code=502, detail=f"Failed to create Daily room: {create_data.get('info', create_data.get('error', create_status))}")
 
     # Generate meeting token
     exp = int(_time.time()) + 7200
