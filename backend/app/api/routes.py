@@ -715,93 +715,26 @@ def create_hms_token(
     payload: HMSTokenRequest,
     current_user: User = Depends(get_current_user),
 ) -> HMSTokenResponse:
-    """Generate a 100ms app token for the requesting user to join a class room."""
-    import base64 as _b64
-    import hashlib as _hashlib
-    import hmac as _hmac
-    import json as _json
-    import re as _re
+    """Generate a 100ms app token using PyJWT (HS256)."""
     import time as _time
-    import urllib.error as _uerr
-    import urllib.request as _ureq
+    import jwt as _jwt  # PyJWT
 
     if not HMS_APP_ACCESS_KEY or not HMS_APP_SECRET:
-        raise HTTPException(status_code=503, detail="100ms is not configured.")
+        raise HTTPException(status_code=503, detail="100ms is not configured. Set HMS_APP_ACCESS_KEY and HMS_APP_SECRET.")
 
-    def _b64url(data: bytes) -> str:
-        return _b64.urlsafe_b64encode(data).rstrip(b"=").decode()
-
-    def _make_jwt(claims: dict) -> str:
-        header = _b64url(_json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
-        body = _b64url(_json.dumps(claims, separators=(",", ":")).encode())
-        signing_input = f"{header}.{body}"
-        sig = _hmac.new(HMS_APP_SECRET.encode(), signing_input.encode(), _hashlib.sha256).digest()
-        return f"{signing_input}.{_b64url(sig)}"
-
-    now = int(_time.time())
-
-    # Management token for calling 100ms REST API
-    mgmt_token = _make_jwt({
-        "access_key": HMS_APP_ACCESS_KEY,
-        "type": "management",
-        "version": 2,
-        "iat": now,
-        "nbf": now,
-        "exp": now + 86400,
-    })
-
-    room_name = "wearekids" + _re.sub(r"[^a-zA-Z0-9]", "", payload.class_id)
-
-    def _hms(method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
-        data = _json.dumps(body).encode() if body else None
-        req = _ureq.Request(
-            f"https://api.100ms.live/v2{path}",
-            data=data,
-            headers={"Authorization": f"Bearer {mgmt_token}", "Content-Type": "application/json"},
-            method=method,
-        )
-        try:
-            with _ureq.urlopen(req, timeout=10) as resp:
-                return resp.status, _json.loads(resp.read())
-        except _uerr.HTTPError as exc:
-            try:
-                err_data = _json.loads(exc.read())
-            except Exception:
-                err_data = {"message": exc.reason}
-            return exc.code, err_data
-
-    # Resolve room_id
-    room_id: str | None = HMS_ROOM_ID or None
-
-    if not room_id and HMS_TEMPLATE_ID:
-        # Create room per class (idempotent)
-        create_status, create_data = _hms("POST", "/rooms", {
-            "name": room_name,
-            "template_id": HMS_TEMPLATE_ID,
-        })
-        logger.info("[HMS] create room status=%d body=%s", create_status, create_data)
-
-        if create_status == 200:
-            room_id = create_data["id"]
-        elif create_status in (409, 400):
-            # Room exists — find by name
-            list_status, list_data = _hms("GET", f"/rooms?name={room_name}")
-            if list_status == 200:
-                rooms = list_data.get("data") or []
-                if rooms:
-                    room_id = rooms[0]["id"]
-        if not room_id:
-            raise HTTPException(status_code=502, detail=f"Failed to set up 100ms room: {create_data.get('message', create_status)}")
-
+    # HMS_ROOM_ID is the pre-created room ID from the 100ms dashboard.
+    # HMS_TEMPLATE_ID accepted as fallback if someone stored a room ID there.
+    room_id = HMS_ROOM_ID or HMS_TEMPLATE_ID
     if not room_id:
         raise HTTPException(
             status_code=503,
-            detail="100ms room is not configured. Set HMS_TEMPLATE_ID (to create rooms per class) or HMS_ROOM_ID (single demo room).",
+            detail="100ms room is not configured. Set HMS_ROOM_ID to a room ID from your 100ms dashboard.",
         )
 
-    # App token for the user
+    now = int(_time.time())
     role = "host" if payload.is_teacher else "guest"
-    app_token = _make_jwt({
+
+    token_payload = {
         "access_key": HMS_APP_ACCESS_KEY,
         "room_id": room_id,
         "user_id": current_user.email,
@@ -811,10 +744,11 @@ def create_hms_token(
         "iat": now,
         "nbf": now,
         "exp": now + 86400,
-    })
+    }
 
-    logger.info("[HMS] token issued — room=%r room_id=%r role=%s user=%r", room_name, room_id, role, current_user.email)
-    return HMSTokenResponse(token=app_token, room_id=room_id)
+    token = _jwt.encode(token_payload, HMS_APP_SECRET, algorithm="HS256")
+    logger.info("[HMS] token issued — room_id=%r role=%s user=%r", room_id, role, current_user.email)
+    return HMSTokenResponse(token=token, room_id=room_id)
 
 
 @api_router.post("/billing/checkout-session", response_model=BillingCheckoutResponse)
