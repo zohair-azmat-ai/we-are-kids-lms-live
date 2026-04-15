@@ -95,8 +95,21 @@ function StatusScreen({
 }
 
 // ─── Video tile for a single peer ────────────────────────────────────────────
+// size="grid"  → standard grid cell (16/9 aspect ratio, fills column)
+// size="large" → focus view, fills container height
+// size="small" → thumbnail strip tile (fixed 128×96)
 
-function VideoTile({ peer }: { peer: HMSPeer }) {
+type TileSize = "grid" | "large" | "small";
+
+function VideoTile({
+  peer,
+  size = "grid",
+  onClick,
+}: {
+  peer: HMSPeer;
+  size?: TileSize;
+  onClick?: () => void;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hmsActions = useHMSActions();
   const videoTrack = useHMSStore(selectVideoTrackByID(peer.videoTrack ?? ""));
@@ -114,15 +127,35 @@ function VideoTile({ peer }: { peer: HMSPeer }) {
 
   const videoOn = videoTrack && videoTrack.enabled;
 
+  // Per-size layout styles
+  const containerStyle: React.CSSProperties = (() => {
+    const base: React.CSSProperties = {
+      position: "relative",
+      background: "#1e293b",
+      borderRadius: size === "small" ? 6 : 8,
+      overflow: "hidden",
+      cursor: onClick ? "pointer" : "default",
+      transition: "box-shadow 0.2s, transform 0.2s",
+      flexShrink: 0,
+    };
+    if (size === "large") {
+      return { ...base, width: "100%", height: "100%" };
+    }
+    if (size === "small") {
+      return { ...base, width: 128, height: 96 };
+    }
+    // grid — maintain 16/9 aspect
+    return { ...base, aspectRatio: "16/9" };
+  })();
+
+  const avatarSize = size === "large" ? 64 : size === "small" ? 32 : 52;
+  const nameFontSize = size === "large" ? 13 : 10;
+
   return (
     <div
-      style={{
-        position: "relative",
-        background: "#1e293b",
-        borderRadius: 8,
-        overflow: "hidden",
-        aspectRatio: "16/9",
-      }}
+      style={containerStyle}
+      onClick={onClick}
+      title={onClick ? (size === "large" ? "Click to exit focus" : "Click to focus") : undefined}
     >
       <video
         ref={videoRef}
@@ -136,6 +169,8 @@ function VideoTile({ peer }: { peer: HMSPeer }) {
           display: videoOn ? "block" : "none",
         }}
       />
+
+      {/* Avatar when camera off */}
       {!videoOn && (
         <div
           style={{
@@ -148,36 +183,60 @@ function VideoTile({ peer }: { peer: HMSPeer }) {
         >
           <div
             style={{
-              width: 52,
-              height: 52,
+              width: avatarSize,
+              height: avatarSize,
               borderRadius: "50%",
               background: "#334155",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               color: "#94a3b8",
-              fontSize: 22,
+              fontSize: avatarSize * 0.42,
             }}
           >
             👤
           </div>
         </div>
       )}
+
+      {/* Name label */}
       <div
         style={{
           position: "absolute",
-          bottom: 8,
-          left: 8,
+          bottom: size === "small" ? 4 : 8,
+          left: size === "small" ? 4 : 8,
           background: "rgba(0,0,0,0.65)",
           borderRadius: 4,
-          padding: "2px 8px",
-          fontSize: 11,
+          padding: size === "small" ? "1px 5px" : "2px 8px",
+          fontSize: nameFontSize,
           color: "#fff",
           fontWeight: 600,
+          maxWidth: "90%",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
         }}
       >
         {peer.name ?? "Participant"} {peer.isLocal ? "(You)" : ""}
       </div>
+
+      {/* "Click to exit" hint overlay on large tile */}
+      {size === "large" && (
+        <div
+          style={{
+            position: "absolute",
+            top: 8,
+            right: 8,
+            background: "rgba(0,0,0,0.5)",
+            borderRadius: 4,
+            padding: "2px 8px",
+            fontSize: 10,
+            color: "#94a3b8",
+          }}
+        >
+          click to exit focus
+        </div>
+      )}
     </div>
   );
 }
@@ -196,7 +255,6 @@ function VideoCall({
   onLeave?: () => void;
 }) {
   const hmsActions = useHMSActions();
-  // isConnected is the single source of truth for whether to show the room
   const isConnected = useHMSStore(selectIsConnectedToRoom);
   const peers = useHMSStore(selectPeers);
   const isAudioEnabled = useHMSStore(selectIsLocalAudioEnabled);
@@ -204,15 +262,14 @@ function VideoCall({
 
   const [error, setError] = useState<string | null>(null);
   const [joiningText, setJoiningText] = useState("Joining room…");
+  // null = grid view; peer.id = focus that peer
+  const [focusedPeerId, setFocusedPeerId] = useState<string | null>(null);
 
-  // Ref guard: prevents double-join in React StrictMode (effects run twice in dev)
   const hasJoinedRef = useRef(false);
-  // Ref mirror of isConnected: lets the timeout callback read current value
-  // without a stale closure (the timeout effect only runs once, on [token] change)
   const isConnectedRef = useRef(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Keep isConnectedRef current and clear the timeout once we're in
+  // Keep ref in sync and clear timeout once connected
   useEffect(() => {
     isConnectedRef.current = !!isConnected;
     if (isConnected) {
@@ -224,7 +281,14 @@ function VideoCall({
     }
   }, [isConnected, peers.length]);
 
-  // Initiate join — runs once per token, guarded against StrictMode double-run
+  // If the focused peer leaves, fall back to grid
+  useEffect(() => {
+    if (focusedPeerId && !peers.find((p) => p.id === focusedPeerId)) {
+      setFocusedPeerId(null);
+    }
+  }, [peers, focusedPeerId]);
+
+  // Initiate join — guarded against StrictMode double-run
   useEffect(() => {
     if (hasJoinedRef.current) {
       console.log("[VideoClassroom] Join already initiated — skipping duplicate (StrictMode).");
@@ -238,7 +302,6 @@ function VideoCall({
     );
     setJoiningText("Joining room…");
 
-    // Timeout uses isConnectedRef (not closure over state) to avoid stale reads
     timeoutRef.current = setTimeout(() => {
       if (!isConnectedRef.current) {
         console.error("[VideoClassroom] join timeout after 15s — not connected");
@@ -250,11 +313,10 @@ function VideoCall({
       .join({
         authToken: token,
         userName,
-        // Start muted — camera/mic permission denial must NOT block room entry
         settings: { isAudioMuted: true, isVideoMuted: true },
       })
       .then(() => {
-        console.log("[VideoClassroom] hmsActions.join() resolved — waiting for store update");
+        console.log("[VideoClassroom] hmsActions.join() resolved");
         if (timeoutRef.current) {
           clearTimeout(timeoutRef.current);
           timeoutRef.current = null;
@@ -271,10 +333,6 @@ function VideoCall({
         setError(`Join failed: ${msg}`);
       });
 
-    // IMPORTANT: do NOT call hmsActions.leave() here.
-    // In React StrictMode dev, cleanup runs between the two effect invocations.
-    // Calling leave() would cancel the in-progress join and leave the SDK in a
-    // broken state for the second invocation. HMSRoomProvider cleans up on unmount.
     return () => {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
@@ -289,59 +347,106 @@ function VideoCall({
     onLeave?.();
   }
 
-  // ── Error state ───────────────────────────────────────────────────────────
+  // ── Error ─────────────────────────────────────────────────────────────────
   if (error) {
-    return (
-      <StatusScreen
-        spinning={false}
-        message={error}
-        isError
-        onLeave={onLeave}
-      />
-    );
+    return <StatusScreen spinning={false} message={error} isError onLeave={onLeave} />;
   }
 
-  // ── Not yet connected — show current join phase ───────────────────────────
-  // Use isConnected (HMS store) as the single gate — no secondary joinStatus
-  // state that can lag behind and cause an extra render cycle of stuck spinner.
+  // ── Connecting ────────────────────────────────────────────────────────────
   if (!isConnected) {
     return <StatusScreen spinning message={joiningText} />;
   }
 
-  // ── Connected — render the room ───────────────────────────────────────────
-  console.log("[VideoClassroom] Rendering room. Peers:", peers.length);
+  // ── Connected ─────────────────────────────────────────────────────────────
+  console.log("[VideoClassroom] Rendering room. peers:", peers.length, "focused:", focusedPeerId);
 
-  const cols =
+  const focusedPeer = focusedPeerId ? peers.find((p) => p.id === focusedPeerId) ?? null : null;
+  const stripPeers = focusedPeer ? peers.filter((p) => p.id !== focusedPeerId) : [];
+
+  // Grid column count: 1 solo, 2 duo, 3 otherwise
+  const gridCols =
     peers.length <= 1 ? "1fr" : peers.length === 2 ? "repeat(2, 1fr)" : "repeat(3, 1fr)";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      {/* Video grid */}
-      <div
-        style={{
-          flex: 1,
-          overflow: "auto",
-          padding: 16,
-          display: "grid",
-          gap: 12,
-          gridTemplateColumns: cols,
-          alignContent: "start",
-        }}
-      >
-        {peers.map((peer) => (
-          <VideoTile key={peer.id} peer={peer} />
-        ))}
-      </div>
 
-      {/* Controls */}
+      {/* ── Video area ──────────────────────────────────────────────────── */}
+      {focusedPeer ? (
+        // Focus mode: large tile + bottom strip
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+
+          {/* Large tile */}
+          <div
+            style={{
+              flex: 1,
+              padding: "12px 12px 8px",
+              overflow: "hidden",
+            }}
+          >
+            <VideoTile
+              peer={focusedPeer}
+              size="large"
+              onClick={() => setFocusedPeerId(null)}
+            />
+          </div>
+
+          {/* Thumbnail strip — only shown when there are other peers */}
+          {stripPeers.length > 0 && (
+            <div
+              style={{
+                flexShrink: 0,
+                display: "flex",
+                gap: 8,
+                overflowX: "auto",
+                padding: "0 12px 10px",
+                scrollbarWidth: "thin",
+                scrollbarColor: "#334155 transparent",
+              }}
+            >
+              {stripPeers.map((peer) => (
+                <VideoTile
+                  key={peer.id}
+                  peer={peer}
+                  size="small"
+                  onClick={() => setFocusedPeerId(peer.id)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        // Grid mode
+        <div
+          style={{
+            flex: 1,
+            overflow: "auto",
+            padding: 12,
+            display: "grid",
+            gap: 10,
+            gridTemplateColumns: gridCols,
+            alignContent: "start",
+          }}
+        >
+          {peers.map((peer) => (
+            <VideoTile
+              key={peer.id}
+              peer={peer}
+              size="grid"
+              onClick={() => setFocusedPeerId(peer.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* ── Controls bar ────────────────────────────────────────────────── */}
       <div
         style={{
           flexShrink: 0,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          gap: 12,
-          padding: "12px 16px",
+          gap: 10,
+          padding: "10px 16px",
           background: "rgba(15,23,42,0.97)",
           borderTop: "1px solid rgba(255,255,255,0.06)",
         }}
@@ -349,7 +454,7 @@ function VideoCall({
         <button
           onClick={() => hmsActions.setLocalAudioEnabled(!isAudioEnabled)}
           style={{
-            padding: "8px 16px",
+            padding: "7px 14px",
             borderRadius: 8,
             background: isAudioEnabled ? "#334155" : "#dc2626",
             color: "#fff",
@@ -365,7 +470,7 @@ function VideoCall({
         <button
           onClick={() => hmsActions.setLocalVideoEnabled(!isVideoEnabled)}
           style={{
-            padding: "8px 16px",
+            padding: "7px 14px",
             borderRadius: 8,
             background: isVideoEnabled ? "#334155" : "#dc2626",
             color: "#fff",
@@ -378,10 +483,29 @@ function VideoCall({
           {isVideoEnabled ? "📷 Hide Cam" : "📷 Show Cam"}
         </button>
 
+        {/* Focus mode shortcut: show exit button in controls too */}
+        {focusedPeerId && (
+          <button
+            onClick={() => setFocusedPeerId(null)}
+            style={{
+              padding: "7px 14px",
+              borderRadius: 8,
+              background: "#1e40af",
+              color: "#fff",
+              border: "none",
+              cursor: "pointer",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            ⊞ Grid
+          </button>
+        )}
+
         <button
           onClick={() => void handleLeave()}
           style={{
-            padding: "8px 16px",
+            padding: "7px 14px",
             borderRadius: 8,
             background: "#7f1d1d",
             color: "#fff",
@@ -431,7 +555,6 @@ export default function VideoClassroom({
           body: JSON.stringify({ class_id: classId, is_teacher: isTeacher ?? false }),
         });
 
-        // Read as text first so non-JSON backend errors show a useful message
         const text = await res.text();
         console.log("[VideoClassroom] Token response status:", res.status, "body:", text.slice(0, 300));
 
