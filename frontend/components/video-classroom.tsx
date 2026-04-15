@@ -5,12 +5,15 @@ import {
   HMSRoomProvider,
   useHMSActions,
   useHMSStore,
+  useScreenShare,
   selectIsConnectedToRoom,
   selectPeers,
   selectVideoTrackByID,
   selectIsLocalAudioEnabled,
   selectIsLocalVideoEnabled,
   selectHMSMessages,
+  selectIsPeerAudioEnabled,
+  selectIsPeerVideoEnabled,
 } from "@100mslive/react-sdk";
 import type { HMSPeer, HMSMessage } from "@100mslive/react-sdk";
 import { getAccessToken } from "@/lib/demo-auth";
@@ -26,17 +29,7 @@ interface VideoClassroomProps {
 
 function Spinner() {
   return (
-    <div
-      style={{
-        width: 36,
-        height: 36,
-        borderRadius: "50%",
-        border: "3px solid #10b981",
-        borderTopColor: "transparent",
-        animation: "spin 0.8s linear infinite",
-        margin: "0 auto 12px",
-      }}
-    />
+    <div style={{ width: 36, height: 36, borderRadius: "50%", border: "3px solid #10b981", borderTopColor: "transparent", animation: "spin 0.8s linear infinite", margin: "0 auto 12px" }} />
   );
 }
 
@@ -46,29 +39,14 @@ function formatTime(date: Date): string {
 
 // ─── Status / error screen ────────────────────────────────────────────────────
 
-function StatusScreen({
-  spinning,
-  message,
-  isError,
-  onLeave,
-}: {
-  spinning: boolean;
-  message: string;
-  isError?: boolean;
-  onLeave?: () => void;
-}) {
+function StatusScreen({ spinning, message, isError, onLeave }: { spinning: boolean; message: string; isError?: boolean; onLeave?: () => void }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", background: "#0f172a" }}>
       <div style={{ textAlign: "center", padding: 32, maxWidth: 420 }}>
         {spinning && <Spinner />}
-        <p style={{ fontSize: 13, color: isError ? "#f87171" : "#94a3b8", marginBottom: isError ? 20 : 0 }}>
-          {message}
-        </p>
+        <p style={{ fontSize: 13, color: isError ? "#f87171" : "#94a3b8", marginBottom: isError ? 20 : 0 }}>{message}</p>
         {isError && onLeave && (
-          <button
-            onClick={onLeave}
-            style={{ padding: "8px 24px", borderRadius: 8, background: "#475569", color: "#fff", border: "none", cursor: "pointer", fontSize: 13 }}
-          >
+          <button onClick={onLeave} style={{ padding: "8px 24px", borderRadius: 8, background: "#475569", color: "#fff", border: "none", cursor: "pointer", fontSize: 13 }}>
             Leave
           </button>
         )}
@@ -99,17 +77,9 @@ function VideoTile({ peer, size = "grid", onClick }: { peer: HMSPeer; size?: Til
 
   const videoOn = videoTrack && videoTrack.enabled;
   const avatarSize = size === "large" ? 64 : size === "small" ? 32 : 52;
-  const nameFontSize = size === "large" ? 13 : 10;
 
   const containerStyle: React.CSSProperties = (() => {
-    const base: React.CSSProperties = {
-      position: "relative",
-      background: "#1e293b",
-      borderRadius: size === "small" ? 6 : 8,
-      overflow: "hidden",
-      cursor: onClick ? "pointer" : "default",
-      flexShrink: 0,
-    };
+    const base: React.CSSProperties = { position: "relative", background: "#1e293b", borderRadius: size === "small" ? 6 : 8, overflow: "hidden", cursor: onClick ? "pointer" : "default", flexShrink: 0 };
     if (size === "large") return { ...base, width: "100%", height: "100%" };
     if (size === "small") return { ...base, width: 128, height: 96 };
     return { ...base, aspectRatio: "16/9" };
@@ -117,19 +87,14 @@ function VideoTile({ peer, size = "grid", onClick }: { peer: HMSPeer; size?: Til
 
   return (
     <div style={containerStyle} onClick={onClick} title={onClick ? (size === "large" ? "Click to exit focus" : "Click to focus") : undefined}>
-      <video
-        ref={videoRef} autoPlay muted={peer.isLocal} playsInline
-        style={{ width: "100%", height: "100%", objectFit: "cover", display: videoOn ? "block" : "none" }}
-      />
+      <video ref={videoRef} autoPlay muted={peer.isLocal} playsInline style={{ width: "100%", height: "100%", objectFit: "cover", display: videoOn ? "block" : "none" }} />
       {!videoOn && (
         <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div style={{ width: avatarSize, height: avatarSize, borderRadius: "50%", background: "#334155", display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: avatarSize * 0.42 }}>
-            👤
-          </div>
+          <div style={{ width: avatarSize, height: avatarSize, borderRadius: "50%", background: "#334155", display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: avatarSize * 0.42 }}>👤</div>
         </div>
       )}
-      <div style={{ position: "absolute", bottom: size === "small" ? 4 : 8, left: size === "small" ? 4 : 8, background: "rgba(0,0,0,0.65)", borderRadius: 4, padding: size === "small" ? "1px 5px" : "2px 8px", fontSize: nameFontSize, color: "#fff", fontWeight: 600, maxWidth: "90%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {peer.name ?? "Participant"} {peer.isLocal ? "(You)" : ""}
+      <div style={{ position: "absolute", bottom: size === "small" ? 4 : 8, left: size === "small" ? 4 : 8, background: "rgba(0,0,0,0.65)", borderRadius: 4, padding: size === "small" ? "1px 5px" : "2px 8px", fontSize: size === "small" ? 10 : 11, color: "#fff", fontWeight: 600, maxWidth: "90%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {peer.name ?? "Participant"}{peer.isLocal ? " (You)" : ""}
       </div>
       {size === "large" && (
         <div style={{ position: "absolute", top: 8, right: 8, background: "rgba(0,0,0,0.5)", borderRadius: 4, padding: "2px 8px", fontSize: 10, color: "#94a3b8" }}>
@@ -140,17 +105,83 @@ function VideoTile({ peer, size = "grid", onClick }: { peer: HMSPeer; size?: Til
   );
 }
 
+// ─── Screen share tile ────────────────────────────────────────────────────────
+
+function ScreenShareTile({ trackId, peerName, onClick }: { trackId: string; peerName?: string; onClick?: () => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const hmsActions = useHMSActions();
+
+  useEffect(() => {
+    if (trackId && videoRef.current) {
+      hmsActions.attachVideo(trackId, videoRef.current);
+      console.log("[VideoClassroom] Screen share track attached:", trackId);
+    }
+    return () => {
+      if (trackId && videoRef.current) {
+        hmsActions.detachVideo(trackId, videoRef.current).catch(() => {});
+      }
+    };
+  }, [trackId, hmsActions]);
+
+  return (
+    <div style={{ position: "relative", width: "100%", height: "100%", background: "#0a0f1e", borderRadius: 8, overflow: "hidden", cursor: onClick ? "pointer" : "default" }} onClick={onClick}>
+      <video ref={videoRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+      <div style={{ position: "absolute", top: 8, left: 8, background: "rgba(16,185,129,0.85)", borderRadius: 4, padding: "3px 10px", fontSize: 11, color: "#fff", fontWeight: 700 }}>
+        🖥 {peerName ? `${peerName}'s screen` : "Screen Share"}
+      </div>
+      {onClick && (
+        <div style={{ position: "absolute", top: 8, right: 8, background: "rgba(0,0,0,0.5)", borderRadius: 4, padding: "2px 8px", fontSize: 10, color: "#94a3b8" }}>
+          click to exit focus
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Participant row ──────────────────────────────────────────────────────────
+
+function ParticipantRow({ peer }: { peer: HMSPeer }) {
+  const isAudioOn = useHMSStore(selectIsPeerAudioEnabled(peer.id));
+  const isVideoOn = useHMSStore(selectIsPeerVideoEnabled(peer.id));
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+      <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#1e293b", display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 13, flexShrink: 0 }}>👤</div>
+      <span style={{ flex: 1, fontSize: 13, color: "#f1f5f9", fontWeight: peer.isLocal ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {peer.name ?? "Participant"}
+        {peer.isLocal && <span style={{ color: "#64748b", fontWeight: 400, fontSize: 11 }}> (You)</span>}
+      </span>
+      <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+        <span title={isAudioOn ? "Mic on" : "Mic off"} style={{ fontSize: 13, opacity: isAudioOn ? 1 : 0.3 }}>🎙</span>
+        <span title={isVideoOn ? "Camera on" : "Camera off"} style={{ fontSize: 13, opacity: isVideoOn ? 1 : 0.3 }}>📷</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Participants panel ───────────────────────────────────────────────────────
+
+function ParticipantsPanel({ peers, onClose, mobile }: { peers: HMSPeer[]; onClose: () => void; mobile: boolean }) {
+  const panelStyle: React.CSSProperties = mobile
+    ? { position: "fixed", left: 0, right: 0, bottom: 52, height: "58vh", zIndex: 50, background: "#0f172a", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", flexDirection: "column" }
+    : { width: 280, flexShrink: 0, background: "#080f1f", borderLeft: "1px solid rgba(255,255,255,0.06)", display: "flex", flexDirection: "column" };
+
+  return (
+    <div style={panelStyle}>
+      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Participants ({peers.length})</span>
+        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#64748b", fontSize: 16, lineHeight: 1, padding: "2px 4px" }}>✕</button>
+      </div>
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {peers.map((peer) => <ParticipantRow key={peer.id} peer={peer} />)}
+      </div>
+    </div>
+  );
+}
+
 // ─── Chat panel ───────────────────────────────────────────────────────────────
 
-function ChatPanel({
-  messages,
-  localPeerId,
-  inputMessage,
-  onInputChange,
-  onSend,
-  onClose,
-  mobile,
-}: {
+function ChatPanel({ messages, localPeerId, inputMessage, onInputChange, onSend, onClose, mobile }: {
   messages: HMSMessage[];
   localPeerId: string;
   inputMessage: string;
@@ -161,48 +192,20 @@ function ChatPanel({
 }) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to newest message
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
 
   const panelStyle: React.CSSProperties = mobile
-    ? {
-        position: "fixed",
-        left: 0,
-        right: 0,
-        bottom: 52, // above controls bar (~51px tall)
-        height: "58vh",
-        zIndex: 50,
-        background: "#0f172a",
-        borderTop: "1px solid rgba(255,255,255,0.1)",
-        display: "flex",
-        flexDirection: "column",
-      }
-    : {
-        width: 300,
-        flexShrink: 0,
-        background: "#080f1f",
-        borderLeft: "1px solid rgba(255,255,255,0.06)",
-        display: "flex",
-        flexDirection: "column",
-      };
+    ? { position: "fixed", left: 0, right: 0, bottom: 52, height: "58vh", zIndex: 50, background: "#0f172a", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", flexDirection: "column" }
+    : { width: 300, flexShrink: 0, background: "#080f1f", borderLeft: "1px solid rgba(255,255,255,0.06)", display: "flex", flexDirection: "column" };
 
   return (
     <div style={panelStyle}>
-      {/* Header */}
       <div style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Chat</span>
-        <button
-          onClick={onClose}
-          style={{ background: "none", border: "none", cursor: "pointer", color: "#64748b", fontSize: 16, lineHeight: 1, padding: "2px 4px" }}
-          title="Close chat"
-        >
-          ✕
-        </button>
+        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#64748b", fontSize: 16, lineHeight: 1, padding: "2px 4px" }}>✕</button>
       </div>
-
-      {/* Messages */}
       <div style={{ flex: 1, overflowY: "auto", padding: "10px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
         {messages.length === 0 ? (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -212,30 +215,14 @@ function ChatPanel({
           messages.map((msg) => {
             const isOwn = msg.sender === localPeerId;
             return (
-              <div
-                key={msg.id}
-                style={{ display: "flex", flexDirection: "column", alignItems: isOwn ? "flex-end" : "flex-start" }}
-              >
-                {/* Sender + time */}
+              <div key={msg.id} style={{ display: "flex", flexDirection: "column", alignItems: isOwn ? "flex-end" : "flex-start" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
                   <span style={{ fontSize: 10, fontWeight: 700, color: isOwn ? "#34d399" : "#818cf8" }}>
                     {isOwn ? "You" : (msg.senderName ?? "Participant")}
                   </span>
                   <span style={{ fontSize: 9, color: "#334155" }}>{formatTime(msg.time)}</span>
                 </div>
-                {/* Bubble */}
-                <div
-                  style={{
-                    maxWidth: "85%",
-                    padding: "6px 10px",
-                    borderRadius: isOwn ? "12px 12px 4px 12px" : "12px 12px 12px 4px",
-                    background: isOwn ? "#1e40af" : "#1e293b",
-                    color: "#f1f5f9",
-                    fontSize: 12,
-                    lineHeight: 1.5,
-                    wordBreak: "break-word",
-                  }}
-                >
+                <div style={{ maxWidth: "85%", padding: "6px 10px", borderRadius: isOwn ? "12px 12px 4px 12px" : "12px 12px 12px 4px", background: isOwn ? "#1e40af" : "#1e293b", color: "#f1f5f9", fontSize: 12, lineHeight: 1.5, wordBreak: "break-word" }}>
                   {String(msg.message)}
                 </div>
               </div>
@@ -244,39 +231,18 @@ function ChatPanel({
         )}
         <div ref={messagesEndRef} />
       </div>
-
-      {/* Input */}
       <div style={{ flexShrink: 0, display: "flex", gap: 6, padding: "8px 10px", borderTop: "1px solid rgba(255,255,255,0.07)" }}>
         <input
           value={inputMessage}
           onChange={(e) => onInputChange(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(); } }}
           placeholder="Type a message…"
-          style={{
-            flex: 1,
-            background: "#1e293b",
-            border: "1px solid rgba(255,255,255,0.08)",
-            borderRadius: 8,
-            padding: "7px 10px",
-            fontSize: 12,
-            color: "#f1f5f9",
-            outline: "none",
-          }}
+          style={{ flex: 1, background: "#1e293b", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "7px 10px", fontSize: 12, color: "#f1f5f9", outline: "none" }}
         />
         <button
           onClick={onSend}
           disabled={!inputMessage.trim()}
-          style={{
-            padding: "7px 12px",
-            borderRadius: 8,
-            background: inputMessage.trim() ? "#1d4ed8" : "#1e293b",
-            color: inputMessage.trim() ? "#fff" : "#475569",
-            border: "none",
-            cursor: inputMessage.trim() ? "pointer" : "default",
-            fontSize: 13,
-            fontWeight: 600,
-            flexShrink: 0,
-          }}
+          style={{ padding: "7px 12px", borderRadius: 8, background: inputMessage.trim() ? "#1d4ed8" : "#1e293b", color: inputMessage.trim() ? "#fff" : "#475569", border: "none", cursor: inputMessage.trim() ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}
         >
           Send
         </button>
@@ -297,12 +263,20 @@ function VideoCall({ token, userName, onLeave }: { token: string; userName: stri
   const isVideoEnabled = useHMSStore(selectIsLocalVideoEnabled);
   const hmsMessages = useHMSStore(selectHMSMessages);
 
+  // Screen share
+  const [screenShareError, setScreenShareError] = useState<string | null>(null);
+  const { amIScreenSharing, toggleScreenShare, screenSharingPeerId, screenSharingPeerName, screenShareVideoTrackId } = useScreenShare(
+    (err) => { console.error("[VideoClassroom] Screen share error:", err); setScreenShareError(err.message); }
+  );
+  const isScreenShareSupported = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getDisplayMedia;
+
   const [error, setError] = useState<string | null>(null);
   const [joiningText, setJoiningText] = useState("Joining room…");
   const [focusedPeerId, setFocusedPeerId] = useState<string | null>(null);
+  const [screenShareFocused, setScreenShareFocused] = useState(false);
 
-  // Chat state
-  const [isChatOpen, setIsChatOpen] = useState(false);
+  // Panel: "chat" | "participants" | null
+  const [activePanel, setActivePanel] = useState<"chat" | "participants" | null>(null);
   const [inputMessage, setInputMessage] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
@@ -313,7 +287,7 @@ function VideoCall({ token, userName, onLeave }: { token: string; userName: stri
   const isConnectedRef = useRef(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Detect mobile viewport
+  // Mobile detection
   useEffect(() => {
     function check() { setIsMobile(window.innerWidth < 640); }
     check();
@@ -333,39 +307,73 @@ function VideoCall({ token, userName, onLeave }: { token: string; userName: stri
   // Auto-reset focus when focused peer leaves
   useEffect(() => {
     if (focusedPeerId && !peers.find((p) => p.id === focusedPeerId)) {
+      console.log("[VideoClassroom] Focused peer left — resetting to grid");
       setFocusedPeerId(null);
     }
   }, [peers, focusedPeerId]);
 
-  // Track unread messages — keep ref current while open, count new arrivals while closed
+  // Log participants updates
   useEffect(() => {
-    if (isChatOpen) {
-      // Chat is visible — everything is "seen"; keep ref current so closing won't
-      // count messages the user already watched as unread.
+    if (isConnected) {
+      console.log("[VideoClassroom] Participants updated. Count:", peers.length, peers.map(p => p.name));
+    }
+  }, [peers.length, isConnected]);
+
+  // Auto-focus screen share when it starts; revert when it ends
+  useEffect(() => {
+    if (screenShareVideoTrackId) {
+      console.log("[VideoClassroom] Screen share started — peer:", screenSharingPeerName, "trackId:", screenShareVideoTrackId);
+      setScreenShareFocused(true);
+      setFocusedPeerId(null);
+    } else {
+      if (screenShareFocused) {
+        console.log("[VideoClassroom] Screen share ended — returning to grid");
+        setScreenShareFocused(false);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screenShareVideoTrackId]);
+
+  // Clear screen share error after 5s
+  useEffect(() => {
+    if (!screenShareError) return;
+    const t = setTimeout(() => setScreenShareError(null), 5000);
+    return () => clearTimeout(t);
+  }, [screenShareError]);
+
+  // Unread message tracking
+  useEffect(() => {
+    if (activePanel === "chat") {
       lastSeenMsgCountRef.current = hmsMessages.length;
       setUnreadCount(0);
     } else {
       const newUnread = hmsMessages.length - lastSeenMsgCountRef.current;
       if (newUnread > 0) {
         setUnreadCount(newUnread);
-        console.log("[VideoClassroom] Chat message received. Total unread:", newUnread);
+        console.log("[VideoClassroom] Chat message received. Unread:", newUnread);
       }
     }
-  }, [hmsMessages.length, isChatOpen]);
+  }, [hmsMessages.length, activePanel]);
 
-  // Clear unread when chat opens
-  function openChat() {
-    setIsChatOpen(true);
-    setUnreadCount(0);
-    lastSeenMsgCountRef.current = hmsMessages.length;
-    console.log("[VideoClassroom] Chat opened. Marked", hmsMessages.length, "messages as read.");
+  function openPanel(panel: "chat" | "participants") {
+    if (activePanel === panel) {
+      setActivePanel(null);
+    } else {
+      setActivePanel(panel);
+      if (panel === "chat") {
+        setUnreadCount(0);
+        lastSeenMsgCountRef.current = hmsMessages.length;
+        console.log("[VideoClassroom] Chat opened.");
+      } else {
+        console.log("[VideoClassroom] Participants panel opened.");
+      }
+    }
   }
 
-  // Join — guarded against StrictMode double-run
+  // Join
   useEffect(() => {
     if (hasJoinedRef.current) return;
     hasJoinedRef.current = true;
-
     console.log("[VideoClassroom] Starting join. userName:", userName, "token prefix:", token.slice(0, 30) + "…");
     setJoiningText("Joining room…");
 
@@ -414,44 +422,84 @@ function VideoCall({ token, userName, onLeave }: { token: string; userName: stri
     }
   }
 
-  // ── Error ─────────────────────────────────────────────────────────────────
-  if (error) return <StatusScreen spinning={false} message={error} isError onLeave={onLeave} />;
+  async function handleToggleScreenShare() {
+    if (!toggleScreenShare) {
+      console.warn("[VideoClassroom] Screen share not available — toggleScreenShare is undefined");
+      setScreenShareError("Screen share is not available for your role.");
+      return;
+    }
+    try {
+      console.log("[VideoClassroom] Toggling screen share. Current:", amIScreenSharing);
+      await toggleScreenShare();
+      console.log("[VideoClassroom] Screen share toggled. Now:", !amIScreenSharing);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[VideoClassroom] Screen share toggle failed:", msg);
+      setScreenShareError(msg);
+    }
+  }
 
-  // ── Connecting ────────────────────────────────────────────────────────────
+  // ── Error / Connecting ────────────────────────────────────────────────────
+  if (error) return <StatusScreen spinning={false} message={error} isError onLeave={onLeave} />;
   if (!isConnected) return <StatusScreen spinning message={joiningText} />;
 
   // ── Connected ─────────────────────────────────────────────────────────────
   const localPeer = peers.find((p) => p.isLocal);
   const localPeerId = localPeer?.id ?? "";
-
   const focusedPeer = focusedPeerId ? peers.find((p) => p.id === focusedPeerId) ?? null : null;
   const stripPeers = focusedPeer ? peers.filter((p) => p.id !== focusedPeerId) : [];
   const gridCols = peers.length <= 1 ? "1fr" : peers.length === 2 ? "repeat(2, 1fr)" : "repeat(3, 1fr)";
 
-  // Controls button style helper
-  const ctrlBtn = (bg: string, active = true): React.CSSProperties => ({
-    padding: "7px 12px",
+  // Inline control button style
+  const btn = (bg: string): React.CSSProperties => ({
+    padding: "7px 11px",
     borderRadius: 8,
     background: bg,
     color: "#fff",
     border: "none",
-    cursor: active ? "pointer" : "default",
+    cursor: "pointer",
     fontSize: 12,
     fontWeight: 600,
-    position: "relative",
     flexShrink: 0,
+    whiteSpace: "nowrap",
+    position: "relative",
   });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
 
-      {/* ── Main content row: video + desktop chat panel ─────────────────── */}
+      {/* ── Main row: video + desktop side panel ─────────────────────────── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "row", overflow: "hidden", minHeight: 0 }}>
 
-        {/* Video section */}
+        {/* Video area */}
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {focusedPeer ? (
-            // Focus mode
+
+          {/* Screen share error banner */}
+          {screenShareError && (
+            <div style={{ flexShrink: 0, background: "#7f1d1d", color: "#fecaca", fontSize: 12, padding: "6px 14px", textAlign: "center" }}>
+              Screen share error: {screenShareError}
+            </div>
+          )}
+
+          {/* Video content: screen share focus / peer focus / grid */}
+          {screenShareFocused && screenShareVideoTrackId ? (
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+              <div style={{ flex: 1, padding: "12px 12px 8px", overflow: "hidden" }}>
+                <ScreenShareTile
+                  trackId={screenShareVideoTrackId}
+                  peerName={screenSharingPeerName}
+                  onClick={() => setScreenShareFocused(false)}
+                />
+              </div>
+              {peers.length > 0 && (
+                <div style={{ flexShrink: 0, display: "flex", gap: 8, overflowX: "auto", padding: "0 12px 10px", scrollbarWidth: "thin", scrollbarColor: "#334155 transparent" }}>
+                  {peers.map((peer) => (
+                    <VideoTile key={peer.id} peer={peer} size="small" onClick={() => { setScreenShareFocused(false); setFocusedPeerId(peer.id); }} />
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : focusedPeer ? (
             <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
               <div style={{ flex: 1, padding: "12px 12px 8px", overflow: "hidden" }}>
                 <VideoTile peer={focusedPeer} size="large" onClick={() => setFocusedPeerId(null)} />
@@ -465,7 +513,6 @@ function VideoCall({ token, userName, onLeave }: { token: string; userName: stri
               )}
             </div>
           ) : (
-            // Grid mode
             <div style={{ flex: 1, overflow: "auto", padding: 12, display: "grid", gap: 10, gridTemplateColumns: gridCols, alignContent: "start" }}>
               {peers.map((peer) => (
                 <VideoTile key={peer.id} peer={peer} size="grid" onClick={() => setFocusedPeerId(peer.id)} />
@@ -474,64 +521,94 @@ function VideoCall({ token, userName, onLeave }: { token: string; userName: stri
           )}
         </div>
 
-        {/* Desktop chat panel (inline, right side) */}
-        {isChatOpen && !isMobile && (
+        {/* Desktop side panels */}
+        {activePanel === "chat" && !isMobile && (
           <ChatPanel
             messages={hmsMessages}
             localPeerId={localPeerId}
             inputMessage={inputMessage}
             onInputChange={setInputMessage}
             onSend={() => void sendChatMessage()}
-            onClose={() => setIsChatOpen(false)}
+            onClose={() => setActivePanel(null)}
+            mobile={false}
+          />
+        )}
+        {activePanel === "participants" && !isMobile && (
+          <ParticipantsPanel
+            peers={peers}
+            onClose={() => setActivePanel(null)}
             mobile={false}
           />
         )}
       </div>
 
-      {/* Mobile chat panel (fixed overlay above controls) */}
-      {isChatOpen && isMobile && (
+      {/* Mobile overlays */}
+      {activePanel === "chat" && isMobile && (
         <ChatPanel
           messages={hmsMessages}
           localPeerId={localPeerId}
           inputMessage={inputMessage}
           onInputChange={setInputMessage}
           onSend={() => void sendChatMessage()}
-          onClose={() => setIsChatOpen(false)}
+          onClose={() => setActivePanel(null)}
           mobile
         />
       )}
+      {activePanel === "participants" && isMobile && (
+        <ParticipantsPanel peers={peers} onClose={() => setActivePanel(null)} mobile />
+      )}
 
       {/* ── Controls bar ────────────────────────────────────────────────── */}
-      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "9px 14px", background: "rgba(15,23,42,0.97)", borderTop: "1px solid rgba(255,255,255,0.06)", flexWrap: "wrap" }}>
+      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 7, padding: "9px 12px", background: "rgba(15,23,42,0.97)", borderTop: "1px solid rgba(255,255,255,0.06)", overflowX: "auto", scrollbarWidth: "none" }}>
 
-        <button onClick={() => hmsActions.setLocalAudioEnabled(!isAudioEnabled)} style={ctrlBtn(isAudioEnabled ? "#334155" : "#dc2626")}>
+        {/* Mute */}
+        <button onClick={() => hmsActions.setLocalAudioEnabled(!isAudioEnabled)} style={btn(isAudioEnabled ? "#334155" : "#dc2626")}>
           {isAudioEnabled ? "🎙 Mute" : "🔇 Unmute"}
         </button>
 
-        <button onClick={() => hmsActions.setLocalVideoEnabled(!isVideoEnabled)} style={ctrlBtn(isVideoEnabled ? "#334155" : "#dc2626")}>
+        {/* Camera */}
+        <button onClick={() => hmsActions.setLocalVideoEnabled(!isVideoEnabled)} style={btn(isVideoEnabled ? "#334155" : "#dc2626")}>
           {isVideoEnabled ? "📷 Cam Off" : "📷 Cam On"}
         </button>
 
-        {focusedPeerId && (
-          <button onClick={() => setFocusedPeerId(null)} style={ctrlBtn("#1e40af")}>
+        {/* Grid reset (only in focus mode) */}
+        {(focusedPeerId || screenShareFocused) && (
+          <button onClick={() => { setFocusedPeerId(null); setScreenShareFocused(false); }} style={btn("#1e40af")}>
             ⊞ Grid
           </button>
         )}
 
-        {/* Chat toggle with unread badge */}
+        {/* Screen share */}
+        {isScreenShareSupported && (
+          <button onClick={() => void handleToggleScreenShare()} style={btn(amIScreenSharing ? "#0f766e" : "#334155")}>
+            {amIScreenSharing ? "🖥 Stop Share" : "🖥 Share"}
+          </button>
+        )}
+
+        {/* Participants */}
         <button
-          onClick={() => { if (isChatOpen) { setIsChatOpen(false); } else { openChat(); } }}
-          style={{ ...ctrlBtn(isChatOpen ? "#0f766e" : "#334155"), position: "relative" }}
+          onClick={() => openPanel("participants")}
+          style={{ ...btn(activePanel === "participants" ? "#1e40af" : "#334155") }}
+        >
+          👥 People ({peers.length})
+        </button>
+
+        {/* Chat with unread badge */}
+        <button
+          onClick={() => openPanel("chat")}
+          style={{ ...btn(activePanel === "chat" ? "#0f766e" : "#334155"), position: "relative" }}
         >
           💬 Chat
-          {!isChatOpen && unreadCount > 0 && (
+          {activePanel !== "chat" && unreadCount > 0 && (
             <span style={{ position: "absolute", top: -4, right: -4, background: "#ef4444", color: "#fff", borderRadius: "50%", width: 16, height: 16, fontSize: 9, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>
               {unreadCount > 9 ? "9+" : unreadCount}
             </span>
           )}
         </button>
 
-        <button onClick={() => void handleLeave()} style={ctrlBtn("#7f1d1d")}>
+        {/* Leave — pushed to end */}
+        <div style={{ flex: 1 }} />
+        <button onClick={() => void handleLeave()} style={btn("#7f1d1d")}>
           Leave
         </button>
       </div>
@@ -596,7 +673,6 @@ export default function VideoClassroom({ classId, userName, isTeacher, onLeave }
   if (fetchStatus === "error") {
     return <StatusScreen spinning={false} message={fetchError ?? "Failed to set up classroom."} isError onLeave={onLeave} />;
   }
-
   if (fetchStatus === "fetching" || !token) {
     return <StatusScreen spinning message="Fetching token…" />;
   }
