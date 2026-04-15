@@ -7,6 +7,7 @@ import { useAuth } from "@/components/auth-provider";
 import {
   ApiError,
   endLiveClass,
+  fetchDailyRoom,
   getApiBaseUrl,
   joinClassPresence,
   leaveClassPresence,
@@ -15,7 +16,7 @@ import {
   type LiveClassSession,
 } from "@/lib/api";
 import { getAccessToken, isMainTeacherRole, isTeacherRole } from "@/lib/demo-auth";
-import AgoraClassroom from "@/components/agora-classroom";
+import DailyClassroom from "@/components/daily-classroom";
 
 type Props = {
   classId: string;
@@ -27,6 +28,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   const { user, isLoading: isAuthLoading } = useAuth();
 
   const [session, setSession] = useState<LiveClassSession | null>(null);
+  const [dailyRoom, setDailyRoom] = useState<{ url: string; token: string } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [canRetry, setCanRetry] = useState(false);
@@ -157,6 +159,23 @@ export function LiveClassroomRoom({ classId, role }: Props) {
         });
         presenceJoinedRef.current = true;
       } catch { /* non-fatal */ }
+
+      if (cancelled) return;
+
+      // Fetch Daily room URL + meeting token before showing the video UI
+      try {
+        const room = await fetchDailyRoom(classId, isTeacher);
+        if (!cancelled) setDailyRoom(room);
+      } catch (roomErr) {
+        isFetchingClassRef.current = false;
+        if (!cancelled) {
+          setError("Unable to set up video room. Please retry.");
+          setCanRetry(true);
+          setIsLoading(false);
+        }
+        console.error("[LiveClassroomRoom] Daily room fetch error:", roomErr);
+        return;
+      }
 
       if (cancelled) return;
       setIsLoading(false);
@@ -333,11 +352,19 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   return (
     <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column", background: "#0f172a" }}>
       {topBar}
-      <div style={{ flex: 1, overflow: "hidden" }}>
-        <AgoraClassroom
-          classId={classId}
-          onLeave={() => void handleLeave()}
-        />
+      <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
+        {dailyRoom ? (
+          <DailyClassroom
+            roomUrl={dailyRoom.url}
+            token={dailyRoom.token}
+            userName={user?.name}
+            onLeave={() => void handleLeave()}
+          />
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#94a3b8", fontSize: 13 }}>
+            Setting up video room…
+          </div>
+        )}
       </div>
     </div>
   );

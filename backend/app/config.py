@@ -59,6 +59,6 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5").strip()
 CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "").strip()
 CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY", "").strip()
 CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "").strip()
-# TEMPORARY HARDCODED TEST — bypasses env/cache issues
-AGORA_APP_ID = "4529ce21b87548c28408b0a7eb740b44"
-AGORA_APP_CERTIFICATE = "910d7c6155324ef7a0cc5953848fcf3f"
+AGORA_APP_ID = os.getenv("AGORA_APP_ID", "").strip()
+AGORA_APP_CERTIFICATE = os.getenv("AGORA_APP_CERTIFICATE", "").strip()
+DAILY_API_KEY = os.getenv("DAILY_API_KEY", "").strip()

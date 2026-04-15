@@ -21,6 +21,7 @@ from app.auth import authenticate_user, create_access_token, get_current_user, h
 from app.config import (
     AGORA_APP_ID,
     AGORA_APP_CERTIFICATE,
+    DAILY_API_KEY,
     OPENAI_API_KEY,
     STRIPE_PRICE_PREMIUM,
     STRIPE_PRICE_STANDARD,
@@ -36,6 +37,8 @@ from app.schemas import (
     AIChatResponse,
     AIInsightsResponse,
     AgoraTokenResponse,
+    DailyRoomRequest,
+    DailyRoomResponse,
     AttendanceRecord,
     AttendanceSummary,
     SessionSummaryResponse,
@@ -616,6 +619,79 @@ def get_agora_token(
         expire_seconds,
     )
     return AgoraTokenResponse(token=token, appId=AGORA_APP_ID, channel=channel, uid=uid)
+
+
+@api_router.post("/daily/room", response_model=DailyRoomResponse)
+def create_daily_room(
+    payload: DailyRoomRequest,
+    current_user: User = Depends(get_current_user),
+) -> DailyRoomResponse:
+    """Create (or retrieve) a Daily.co room for a class and return a meeting token."""
+    import json as _json
+    import re as _re
+    import time as _time
+    import urllib.error as _uerr
+    import urllib.request as _ureq
+
+    if not DAILY_API_KEY:
+        raise HTTPException(status_code=503, detail="Daily.co is not configured.")
+
+    room_name = "wearekids" + _re.sub(r"[^a-zA-Z0-9]", "", payload.class_id)
+    headers = {
+        "Authorization": f"Bearer {DAILY_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    def _daily(method: str, path: str, body: dict | None = None) -> dict:
+        data = _json.dumps(body).encode() if body else None
+        req = _ureq.Request(
+            f"https://api.daily.co/v1{path}",
+            data=data,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with _ureq.urlopen(req, timeout=10) as resp:
+                return _json.loads(resp.read())
+        except _uerr.HTTPError as exc:
+            body_text = exc.read().decode()
+            return {"_status": exc.code, "_body": body_text}
+
+    # Create room — 409 means it already exists, which is fine
+    exp = int(_time.time()) + 7200
+    room_resp = _daily("POST", "/rooms", {
+        "name": room_name,
+        "privacy": "private",
+        "properties": {
+            "exp": exp,
+            "enable_screenshare": True,
+            "enable_chat": True,
+            "start_video_off": False,
+            "start_audio_off": False,
+        },
+    })
+    status = room_resp.get("_status")
+    if status and status not in (200, 409):
+        logger.error("[Daily] room create failed: %s — %s", status, room_resp.get("_body", ""))
+        raise HTTPException(status_code=502, detail="Failed to create Daily room.")
+
+    # Generate meeting token
+    token_resp = _daily("POST", "/meeting-tokens", {
+        "properties": {
+            "room_name": room_name,
+            "is_owner": payload.is_owner,
+            "exp": exp,
+            "user_name": current_user.name,
+        },
+    })
+    if "_status" in token_resp:
+        logger.error("[Daily] token create failed: %s — %s", token_resp["_status"], token_resp.get("_body", ""))
+        raise HTTPException(status_code=502, detail="Failed to create Daily meeting token.")
+
+    meeting_token = token_resp.get("token", "")
+    room_url = f"https://wearekids.daily.co/{room_name}"
+    logger.info("[Daily] room ready — room=%r is_owner=%s user=%r", room_name, payload.is_owner, current_user.email)
+    return DailyRoomResponse(url=room_url, token=meeting_token, room_name=room_name)
 
 
 @api_router.post("/billing/checkout-session", response_model=BillingCheckoutResponse)

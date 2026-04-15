@@ -372,3 +372,14 @@ class AgoraTokenResponse(BaseModel):
     appId: str
     channel: str
     uid: int
+
+
+class DailyRoomRequest(BaseModel):
+    class_id: str
+    is_owner: bool = False
+
+
+class DailyRoomResponse(BaseModel):
+    url: str
+    token: str
+    room_name: str
