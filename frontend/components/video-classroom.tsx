@@ -214,7 +214,7 @@ function VideoCall({
 
   // Keep isConnectedRef current and clear the timeout once we're in
   useEffect(() => {
-    isConnectedRef.current = isConnected;
+    isConnectedRef.current = !!isConnected;
     if (isConnected) {
       console.log("[VideoClassroom] isConnected=true — peers:", peers.length);
       if (timeoutRef.current) {
