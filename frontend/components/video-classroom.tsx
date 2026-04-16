@@ -138,9 +138,42 @@ function ScreenShareTile({ trackId, peerName, onClick }: { trackId: string; peer
   );
 }
 
+// ─── Participant dedup helpers ────────────────────────────────────────────────
+
+/**
+ * Returns a stable identity key for a peer.
+ * Priority: customerUserId (set to user email in JWT) → normalised name → peer.id
+ */
+function getPeerIdentityKey(peer: HMSPeer): string {
+  if (peer.customerUserId) return peer.customerUserId.toLowerCase().trim();
+  if (peer.name) return peer.name.toLowerCase().trim();
+  return peer.id;
+}
+
+type UniqueParticipant = { peer: HMSPeer; deviceCount: number; key: string };
+
+/**
+ * Collapse raw peers into one entry per unique human.
+ * The local peer is preferred as representative when present.
+ */
+function deduplicatePeers(peers: HMSPeer[]): UniqueParticipant[] {
+  const map = new Map<string, UniqueParticipant>();
+  for (const peer of peers) {
+    const key = getPeerIdentityKey(peer);
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, { peer, deviceCount: 1, key });
+    } else {
+      const representative = peer.isLocal ? peer : existing.peer;
+      map.set(key, { peer: representative, deviceCount: existing.deviceCount + 1, key });
+    }
+  }
+  return Array.from(map.values());
+}
+
 // ─── Participant row ──────────────────────────────────────────────────────────
 
-function ParticipantRow({ peer }: { peer: HMSPeer }) {
+function ParticipantRow({ peer, deviceCount }: { peer: HMSPeer; deviceCount: number }) {
   const isAudioOn = useHMSStore(selectIsPeerAudioEnabled(peer.id));
   const isVideoOn = useHMSStore(selectIsPeerVideoEnabled(peer.id));
 
@@ -150,6 +183,7 @@ function ParticipantRow({ peer }: { peer: HMSPeer }) {
       <span style={{ flex: 1, fontSize: 13, color: "#f1f5f9", fontWeight: peer.isLocal ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {peer.name ?? "Participant"}
         {peer.isLocal && <span style={{ color: "#64748b", fontWeight: 400, fontSize: 11 }}> (You)</span>}
+        {deviceCount > 1 && <span style={{ color: "#64748b", fontWeight: 400, fontSize: 11 }}> · {deviceCount} devices</span>}
       </span>
       <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
         <span title={isAudioOn ? "Mic on" : "Mic off"} style={{ fontSize: 13, opacity: isAudioOn ? 1 : 0.3 }}>🎙</span>
@@ -162,6 +196,7 @@ function ParticipantRow({ peer }: { peer: HMSPeer }) {
 // ─── Participants panel ───────────────────────────────────────────────────────
 
 function ParticipantsPanel({ peers, onClose, mobile }: { peers: HMSPeer[]; onClose: () => void; mobile: boolean }) {
+  const unique = deduplicatePeers(peers);
   const panelStyle: React.CSSProperties = mobile
     ? { position: "fixed", left: 0, right: 0, bottom: 52, height: "58vh", zIndex: 50, background: "#0f172a", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", flexDirection: "column" }
     : { width: 280, flexShrink: 0, background: "#080f1f", borderLeft: "1px solid rgba(255,255,255,0.06)", display: "flex", flexDirection: "column" };
@@ -169,11 +204,18 @@ function ParticipantsPanel({ peers, onClose, mobile }: { peers: HMSPeer[]; onClo
   return (
     <div style={panelStyle}>
       <div style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Participants ({peers.length})</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>
+          Participants ({unique.length})
+          {unique.length !== peers.length && (
+            <span style={{ color: "#475569", fontSize: 11, fontWeight: 400 }}> ({peers.length} streams)</span>
+          )}
+        </span>
         <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#64748b", fontSize: 16, lineHeight: 1, padding: "2px 4px" }}>✕</button>
       </div>
       <div style={{ flex: 1, overflowY: "auto" }}>
-        {peers.map((peer) => <ParticipantRow key={peer.id} peer={peer} />)}
+        {unique.map(({ peer, deviceCount, key }) => (
+          <ParticipantRow key={key} peer={peer} deviceCount={deviceCount} />
+        ))}
       </div>
     </div>
   );
@@ -312,10 +354,21 @@ function VideoCall({ token, userName, onLeave }: { token: string; userName: stri
     }
   }, [peers, focusedPeerId]);
 
-  // Log participants updates
+  // Log participants updates — raw count + deduplicated unique count
   useEffect(() => {
     if (isConnected) {
-      console.log("[VideoClassroom] Participants updated. Count:", peers.length, peers.map(p => p.name));
+      const unique = deduplicatePeers(peers);
+      console.log(
+        "[VideoClassroom] Participants updated. Raw peers:", peers.length,
+        "| Unique users:", unique.length,
+        "| Detail:", peers.map((p) => ({
+          id: p.id.slice(0, 8),
+          name: p.name,
+          customerUserId: p.customerUserId ?? "(none)",
+          key: getPeerIdentityKey(p),
+          isLocal: p.isLocal,
+        }))
+      );
     }
   }, [peers.length, isConnected]);
 
@@ -404,7 +457,26 @@ function VideoCall({ token, userName, onLeave }: { token: string; userName: stri
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
+  // Cleanup on tab/browser close — fires for page navigation, tab close, mobile Safari background kill
+  useEffect(() => {
+    function onUnload() {
+      if (isConnectedRef.current) {
+        console.log("[VideoClassroom] Page unloading — leave cleanup fired");
+        hmsActions.leave().catch(() => {});
+      } else {
+        console.log("[VideoClassroom] Page unloading — leave cleanup skipped (not connected)");
+      }
+    }
+    window.addEventListener("pagehide", onUnload);
+    window.addEventListener("beforeunload", onUnload);
+    return () => {
+      window.removeEventListener("pagehide", onUnload);
+      window.removeEventListener("beforeunload", onUnload);
+    };
+  }, [hmsActions]);
+
   async function handleLeave() {
+    console.log("[VideoClassroom] Leave button clicked");
     await hmsActions.leave().catch(() => {});
     onLeave?.();
   }
@@ -449,6 +521,8 @@ function VideoCall({ token, userName, onLeave }: { token: string; userName: stri
   const focusedPeer = focusedPeerId ? peers.find((p) => p.id === focusedPeerId) ?? null : null;
   const stripPeers = focusedPeer ? peers.filter((p) => p.id !== focusedPeerId) : [];
   const gridCols = peers.length <= 1 ? "1fr" : peers.length === 2 ? "repeat(2, 1fr)" : "repeat(3, 1fr)";
+  // Unique human count — used for People badge; raw peers used for video tiles
+  const uniqueParticipantCount = deduplicatePeers(peers).length;
 
   // Inline control button style
   const btn = (bg: string): React.CSSProperties => ({
@@ -590,7 +664,7 @@ function VideoCall({ token, userName, onLeave }: { token: string; userName: stri
           onClick={() => openPanel("participants")}
           style={{ ...btn(activePanel === "participants" ? "#1e40af" : "#334155") }}
         >
-          👥 People ({peers.length})
+          👥 People ({uniqueParticipantCount})
         </button>
 
         {/* Chat with unread badge */}
