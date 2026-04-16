@@ -17,6 +17,10 @@ import {
 import { getAccessToken, isMainTeacherRole, isTeacherRole } from "@/lib/demo-auth";
 import VideoClassroom from "@/components/video-classroom";
 
+// idle → starting → recording → stopping → uploading → idle
+//                             ↘ error → idle
+type RecordingState = "idle" | "starting" | "recording" | "stopping" | "uploading" | "error";
+
 type Props = {
   classId: string;
   role: "teacher" | "student";
@@ -31,8 +35,8 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   const [error, setError] = useState("");
   const [canRetry, setCanRetry] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isUploadingRecording, setIsUploadingRecording] = useState(false);
+  const [recordingState, setRecordingState] = useState<RecordingState>("idle");
+  const [recordingError, setRecordingError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
 
   const hasInitializedRef = useRef(false);
@@ -213,12 +217,25 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     router.push(dashboardPath);
   }
 
+  function showRecordingError(msg: string) {
+    setRecordingState("error");
+    setRecordingError(msg);
+    setTimeout(() => {
+      setRecordingState("idle");
+      setRecordingError(null);
+    }, 3500);
+  }
+
   async function handleToggleRecording() {
     if (!session || !user) return;
+    if (recordingState === "starting" || recordingState === "stopping" || recordingState === "uploading") return;
 
-    if (!isRecording) {
+    if (recordingState === "idle" || recordingState === "error") {
       // ── START RECORDING ────────────────────────────────────────────
-      console.log("[Recording] Starting recording for class:", classId);
+      console.log("[Recording] Recording button clicked — starting for class:", classId);
+      // Optimistic: switch to "starting" immediately so UI responds on first tap
+      setRecordingState("starting");
+      setRecordingError(null);
 
       // 1. Request screen capture (hints to share the current browser tab)
       let stream: MediaStream;
@@ -229,26 +246,29 @@ export function LiveClassroomRoom({ classId, role }: Props) {
         });
       } catch (err) {
         console.warn("[Recording] getDisplayMedia denied or unsupported:", err);
+        showRecordingError("Screen capture denied.");
         return;
       }
       mediaStreamRef.current = stream;
       recordedChunksRef.current = [];
 
-      // 2. Create DB entry first so recording is visible immediately
+      // 2. Create DB entry (optimistic — UI already shows "starting")
+      console.log("[Recording] Recording start request sent");
       let recordingId: string;
       try {
         const result = await startRecordingSession({ classId, title: session.title });
         recordingId = result.recording_id;
         recordingIdRef.current = recordingId;
-        console.log("[Recording] Recording started — id:", recordingId);
+        console.log("[Recording] Recording start success — id:", recordingId);
       } catch (err) {
-        console.error("[Recording] Failed to create DB entry:", err);
+        console.error("[Recording] Recording error — failed to create DB entry:", err);
         stream.getTracks().forEach((t) => t.stop());
         mediaStreamRef.current = null;
+        showRecordingError("Failed to start recording.");
         return;
       }
 
-      // 3. Start MediaRecorder
+      // 3. Pick best supported mimeType
       const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
         ? "video/webm;codecs=vp9,opus"
         : MediaRecorder.isTypeSupported("video/webm")
@@ -262,22 +282,21 @@ export function LiveClassroomRoom({ classId, role }: Props) {
       };
 
       recorder.onstop = async () => {
-        console.log("[Recording] MediaRecorder stopped — uploading...");
         const chunks = recordedChunksRef.current;
         const id = recordingIdRef.current;
         const sess = session;
         const usr = user;
 
-        // Stop all tracks
         mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
         mediaStreamRef.current = null;
 
-        setIsRecording(false);
-        setIsUploadingRecording(true);
+        setRecordingState("uploading");
+        console.log("[Recording] Recording stop success — uploading…");
 
         try {
           if (chunks.length === 0 || !id) {
-            console.warn("[Recording] No chunks recorded or missing id — skipping upload.");
+            console.warn("[Recording] No chunks or missing id — skipping upload.");
+            setRecordingState("idle");
             return;
           }
           const blob = new Blob(chunks, { type: mimeType || "video/webm" });
@@ -295,28 +314,29 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           recordingIdRef.current = null;
           recordedChunksRef.current = [];
         } catch (err) {
-          console.error("[Recording] Upload failed:", err);
+          console.error("[Recording] Recording error — upload failed:", err);
         } finally {
-          setIsUploadingRecording(false);
+          setRecordingState("idle");
         }
       };
 
-      // If the user stops sharing via the browser's native stop button, clean up
+      // Handle user stopping share via browser's native stop button
       stream.getVideoTracks()[0]?.addEventListener("ended", () => {
         if (mediaRecorderRef.current?.state === "recording") {
           mediaRecorderRef.current.stop();
         }
       });
 
-      recorder.start(5000); // collect chunks every 5 s
-      setIsRecording(true);
+      recorder.start(5000);
+      setRecordingState("recording");
     } else {
       // ── STOP RECORDING ─────────────────────────────────────────────
-      console.log("[Recording] Stopping recording...");
+      console.log("[Recording] Stop recording clicked");
+      setRecordingState("stopping");
       if (mediaRecorderRef.current?.state === "recording") {
-        mediaRecorderRef.current.stop(); // triggers onstop which handles upload
+        mediaRecorderRef.current.stop(); // triggers onstop → uploading → idle
       } else {
-        setIsRecording(false);
+        setRecordingState("idle");
       }
     }
   }
@@ -326,65 +346,170 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     return null;
   }
 
+  const isRecActive = recordingState === "recording";
+  const isRecBusy = recordingState === "starting" || recordingState === "stopping" || recordingState === "uploading";
+  const recButtonDisabled = isRecBusy;
+
+  const recButtonLabel =
+    recordingState === "starting"  ? "Starting…" :
+    recordingState === "recording" ? "Stop REC"  :
+    recordingState === "stopping"  ? "Stopping…" :
+    recordingState === "uploading" ? "Saving…"   :
+    recordingState === "error"     ? "Error"      :
+    "REC";
+
+  const recButtonBg =
+    recordingState === "recording" ? "rgba(239,68,68,0.18)" :
+    recordingState === "uploading" ? "rgba(124,58,237,0.18)" :
+    recordingState === "error"     ? "rgba(239,68,68,0.12)" :
+    "rgba(255,255,255,0.06)";
+
+  const recButtonBorder =
+    recordingState === "recording" ? "1px solid rgba(239,68,68,0.5)" :
+    recordingState === "uploading" ? "1px solid rgba(124,58,237,0.4)" :
+    recordingState === "error"     ? "1px solid rgba(239,68,68,0.35)" :
+    "1px solid rgba(255,255,255,0.1)";
+
   const topBar = (
-    <div
-      style={{ height: 52, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px", background: "rgba(15,23,42,0.98)", borderBottom: "1px solid rgba(255,255,255,0.06)", zIndex: 10 }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-        <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#10b981", animation: "pulse 2s infinite", flexShrink: 0 }} />
-        <span style={{ fontSize: 14, fontWeight: 600, color: "#f1f5f9", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {session?.title ?? "Live Classroom"}
-        </span>
-        {session?.teacher_name && (
-          <span style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>
-            · {session.teacher_name}
-          </span>
-        )}
-        {session && (
-          <span style={{ fontSize: 10, fontWeight: 700, color: "#34d399", background: "rgba(52,211,153,0.15)", borderRadius: 99, padding: "2px 8px", flexShrink: 0 }}>
-            LIVE
-          </span>
-        )}
-      </div>
+    <>
+      {/* Keyframe injection for blinking dot */}
+      <style>{`
+        @keyframes rec-blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+        @keyframes cls-spin  { to{transform:rotate(360deg)} }
+      `}</style>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-        {isMainTeacher && session && (
-          <button
-            type="button"
-            onClick={() => void handleToggleRecording()}
-            disabled={isUploadingRecording}
-            style={{
-              display: "flex", alignItems: "center", gap: 4,
-              padding: "4px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600,
-              cursor: isUploadingRecording ? "default" : "pointer", border: "none",
-              background: isUploadingRecording ? "#7c3aed" : isRecording ? "#ef4444" : "#334155",
-              color: "#f1f5f9", opacity: isUploadingRecording ? 0.8 : 1,
-            }}
-          >
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: isUploadingRecording ? "#c4b5fd" : isRecording ? "#fff" : "#94a3b8" }} />
-            {isUploadingRecording ? "Saving…" : isRecording ? "Stop" : "Rec"}
-          </button>
-        )}
+      <div style={{
+        height: 52, flexShrink: 0,
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "0 12px", gap: 8,
+        background: "rgba(15,23,42,0.98)",
+        borderBottom: "1px solid rgba(255,255,255,0.06)",
+        zIndex: 10,
+      }}>
+        {/* ── Left: title + badges ── */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
+          {/* LIVE badge */}
+          {session && (
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: 5,
+              fontSize: 10, fontWeight: 700, letterSpacing: "0.06em",
+              color: "#34d399",
+              background: "rgba(52,211,153,0.10)",
+              border: "1px solid rgba(52,211,153,0.30)",
+              borderRadius: 99, padding: "3px 8px", flexShrink: 0,
+            }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10b981", animation: "rec-blink 2s ease-in-out infinite" }} />
+              LIVE
+            </span>
+          )}
 
-        {isMainTeacher ? (
-          <button
-            type="button"
-            onClick={() => void handleEndClass()}
-            style={{ padding: "4px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none", background: "#dc2626", color: "#fff" }}
-          >
-            End Class
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => void handleLeave()}
-            style={{ padding: "4px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none", background: "#475569", color: "#f1f5f9" }}
-          >
-            Leave
-          </button>
-        )}
+          {/* REC badge — visible while recording/stopping/uploading */}
+          {(isRecActive || isRecBusy) && (
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: 5,
+              fontSize: 10, fontWeight: 700, letterSpacing: "0.06em",
+              color: recordingState === "uploading" ? "#a78bfa" : "#f87171",
+              background: recordingState === "uploading" ? "rgba(124,58,237,0.15)" : "rgba(239,68,68,0.15)",
+              border: recordingState === "uploading" ? "1px solid rgba(124,58,237,0.35)" : "1px solid rgba(239,68,68,0.40)",
+              borderRadius: 99, padding: "3px 8px", flexShrink: 0,
+            }}>
+              {recordingState === "uploading"
+                ? <span style={{ width: 7, height: 7, borderRadius: "50%", border: "2px solid #a78bfa", borderTopColor: "transparent", animation: "cls-spin 0.7s linear infinite" }} />
+                : <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#ef4444", animation: isRecActive ? "rec-blink 1s ease-in-out infinite" : "none" }} />
+              }
+              {recordingState === "uploading" ? "SAVING" : "REC"}
+            </span>
+          )}
+
+          {/* Error badge */}
+          {recordingState === "error" && recordingError && (
+            <span style={{
+              fontSize: 10, fontWeight: 600, color: "#fca5a5",
+              background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)",
+              borderRadius: 99, padding: "3px 8px", flexShrink: 0,
+            }}>
+              {recordingError}
+            </span>
+          )}
+
+          {/* Session title */}
+          <span style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+            {session?.title ?? "Live Classroom"}
+          </span>
+
+          {session?.teacher_name && (
+            <span style={{ fontSize: 11, color: "#475569", whiteSpace: "nowrap", flexShrink: 0 }}>
+              · {session.teacher_name}
+            </span>
+          )}
+        </div>
+
+        {/* ── Right: controls ── */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          {isMainTeacher && session && (
+            <button
+              type="button"
+              onClick={() => void handleToggleRecording()}
+              disabled={recButtonDisabled}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 5,
+                padding: "6px 11px", borderRadius: 8,
+                fontSize: 11, fontWeight: 600, letterSpacing: "0.03em",
+                cursor: recButtonDisabled ? "default" : "pointer",
+                border: recButtonBorder,
+                background: recButtonBg,
+                color: recordingState === "recording" ? "#fca5a5"
+                     : recordingState === "uploading"  ? "#c4b5fd"
+                     : recordingState === "error"       ? "#fca5a5"
+                     : "#cbd5e1",
+                opacity: recButtonDisabled ? 0.7 : 1,
+                transition: "background 0.15s, border 0.15s, color 0.15s",
+                minWidth: 72, justifyContent: "center",
+                // Large tap target on mobile
+                WebkitTapHighlightColor: "transparent",
+              }}
+            >
+              {/* Blinking dot inside button when recording */}
+              {isRecActive && (
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#ef4444", flexShrink: 0, animation: "rec-blink 1s ease-in-out infinite" }} />
+              )}
+              {recordingState === "starting" && (
+                <span style={{ width: 7, height: 7, borderRadius: "50%", border: "2px solid #94a3b8", borderTopColor: "transparent", flexShrink: 0, animation: "cls-spin 0.7s linear infinite" }} />
+              )}
+              {recButtonLabel}
+            </button>
+          )}
+
+          {isMainTeacher ? (
+            <button
+              type="button"
+              onClick={() => void handleEndClass()}
+              style={{
+                padding: "6px 12px", borderRadius: 8, fontSize: 11, fontWeight: 600,
+                cursor: "pointer", border: "1px solid rgba(220,38,38,0.5)",
+                background: "rgba(220,38,38,0.15)", color: "#fca5a5",
+                WebkitTapHighlightColor: "transparent",
+              }}
+            >
+              End Class
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void handleLeave()}
+              style={{
+                padding: "6px 12px", borderRadius: 8, fontSize: 11, fontWeight: 600,
+                cursor: "pointer", border: "1px solid rgba(255,255,255,0.1)",
+                background: "rgba(255,255,255,0.06)", color: "#94a3b8",
+                WebkitTapHighlightColor: "transparent",
+              }}
+            >
+              Leave
+            </button>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 
   if (isLoading) {
