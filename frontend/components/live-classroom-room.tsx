@@ -232,36 +232,36 @@ export function LiveClassroomRoom({ classId, role }: Props) {
 
     if (recordingState === "idle" || recordingState === "error") {
       // ── START RECORDING ────────────────────────────────────────────
-      console.log("[Recording] Recording button clicked — starting for class:", classId);
+      // Records the teacher's local camera + microphone — NOT screen capture.
+      // Screen sharing is a separate button in the video controls below.
+      console.log("[Recording] REC clicked — starting for class:", classId);
       // Optimistic: switch to "starting" immediately so UI responds on first tap
       setRecordingState("starting");
       setRecordingError(null);
 
-      // 1. Request screen capture (hints to share the current browser tab)
+      // 1. Grab local camera + mic stream (does NOT trigger screen-share dialog)
       let stream: MediaStream;
       try {
-        stream = await navigator.mediaDevices.getDisplayMedia({
-          video: { displaySurface: "browser" } as MediaTrackConstraints,
-          audio: true,
-        });
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        console.log("[Recording] Camera stream acquired — tracks:", stream.getTracks().map((t) => t.kind).join(", "));
       } catch (err) {
-        console.warn("[Recording] getDisplayMedia denied or unsupported:", err);
-        showRecordingError("Screen capture denied.");
+        console.warn("[Recording] getUserMedia denied or unsupported:", err);
+        showRecordingError("Camera/mic access denied.");
         return;
       }
       mediaStreamRef.current = stream;
       recordedChunksRef.current = [];
 
       // 2. Create DB entry (optimistic — UI already shows "starting")
-      console.log("[Recording] Recording start request sent");
+      console.log("[Recording] Recording start requested");
       let recordingId: string;
       try {
         const result = await startRecordingSession({ classId, title: session.title });
         recordingId = result.recording_id;
         recordingIdRef.current = recordingId;
-        console.log("[Recording] Recording start success — id:", recordingId);
+        console.log("[Recording] Recording started — id:", recordingId);
       } catch (err) {
-        console.error("[Recording] Recording error — failed to create DB entry:", err);
+        console.error("[Recording] Failed to create DB entry:", err);
         stream.getTracks().forEach((t) => t.stop());
         mediaStreamRef.current = null;
         showRecordingError("Failed to start recording.");
@@ -287,11 +287,12 @@ export function LiveClassroomRoom({ classId, role }: Props) {
         const sess = session;
         const usr = user;
 
+        // Release the separate recording stream (does not affect 100ms call)
         mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
         mediaStreamRef.current = null;
 
         setRecordingState("uploading");
-        console.log("[Recording] Recording stop success — uploading…");
+        console.log("[Recording] Recording stopped — upload started. chunks:", chunks.length);
 
         try {
           if (chunks.length === 0 || !id) {
@@ -301,7 +302,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           }
           const blob = new Blob(chunks, { type: mimeType || "video/webm" });
           const file = new File([blob], `recording-${id}.webm`, { type: blob.type });
-          console.log("[Recording] Uploading blob — size:", blob.size, "bytes, recording_id:", id);
+          console.log("[Recording] Uploading blob — size:", blob.size, "bytes, id:", id);
 
           const result = await uploadRecording({
             classId,
@@ -314,21 +315,15 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           recordingIdRef.current = null;
           recordedChunksRef.current = [];
         } catch (err) {
-          console.error("[Recording] Recording error — upload failed:", err);
+          console.error("[Recording] Upload failed:", err);
         } finally {
           setRecordingState("idle");
         }
       };
 
-      // Handle user stopping share via browser's native stop button
-      stream.getVideoTracks()[0]?.addEventListener("ended", () => {
-        if (mediaRecorderRef.current?.state === "recording") {
-          mediaRecorderRef.current.stop();
-        }
-      });
-
       recorder.start(5000);
       setRecordingState("recording");
+      console.log("[Recording] MediaRecorder started");
     } else {
       // ── STOP RECORDING ─────────────────────────────────────────────
       console.log("[Recording] Stop recording clicked");
@@ -355,7 +350,6 @@ export function LiveClassroomRoom({ classId, role }: Props) {
     recordingState === "recording" ? "Stop REC"  :
     recordingState === "stopping"  ? "Stopping…" :
     recordingState === "uploading" ? "Saving…"   :
-    recordingState === "error"     ? "Error"      :
     "REC";
 
   const recButtonBg =
@@ -421,16 +415,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
             </span>
           )}
 
-          {/* Error badge */}
-          {recordingState === "error" && recordingError && (
-            <span style={{
-              fontSize: 10, fontWeight: 600, color: "#fca5a5",
-              background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)",
-              borderRadius: 99, padding: "3px 8px", flexShrink: 0,
-            }}>
-              {recordingError}
-            </span>
-          )}
+          {/* Error handled separately as a floating toast below */}
 
           {/* Session title */}
           <span style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
@@ -561,6 +546,18 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           isTeacher={isTeacher}
           onLeave={() => void handleLeave()}
         />
+        {/* Floating error toast — fades in for 3.5 s then auto-clears */}
+        {recordingState === "error" && recordingError && (
+          <div style={{
+            position: "absolute", bottom: 72, left: "50%", transform: "translateX(-50%)",
+            background: "rgba(239,68,68,0.92)", color: "#fff",
+            fontSize: 12, fontWeight: 600, borderRadius: 8,
+            padding: "8px 16px", pointerEvents: "none", zIndex: 50,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.4)", whiteSpace: "nowrap",
+          }}>
+            {recordingError}
+          </div>
+        )}
       </div>
     </div>
   );
