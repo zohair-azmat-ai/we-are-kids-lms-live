@@ -1106,6 +1106,8 @@ def start_recording_session(
         )
         db.add(recording)
         db.commit()
+        logger.info("[Recording] Recording started — id=%s class_id=%s teacher=%s title=%r",
+                    recording_id, payload.class_id, current_user.email, recording.title)
         return RecordingStartResponse(recording_id=recording_id, message="Recording started.")
 
 
@@ -1164,11 +1166,14 @@ async def upload_recording(
         file_suffix = Path(recorded_file.filename or "recording.webm").suffix or ".webm"
         new_id = recording_id.strip() or uuid4().hex
         file_bytes = await recorded_file.read()
+        logger.info("[Recording] Recording file received — id=%s size=%d bytes teacher=%s",
+                    new_id, len(file_bytes), current_user.email)
 
         # --- 1. Try Cloudinary upload (primary) ---
         cloud_url: str | None = None
         if file_bytes:
             cloud_url = upload_recording_to_cloud(file_bytes, public_id=new_id)
+        logger.info("[Recording] Playback/video URL received — cloud_url=%s", cloud_url or "(none, using local)")
 
         # --- 2. Fallback: try local disk ---
         actual_file_path = "no-file"
@@ -1194,6 +1199,8 @@ async def upload_recording(
             existing.status = final_status
             db.commit()
             db.refresh(existing)
+            logger.info("[Recording] Recording finished — id=%s cloud_url=%s status=%s",
+                        new_id, cloud_url, final_status)
             return serialize_recording(existing, classroom.teacher)
 
         recording = Recording(
@@ -1210,6 +1217,8 @@ async def upload_recording(
         db.add(recording)
         db.commit()
         db.refresh(recording)
+        logger.info("[Recording] Recording finished — id=%s cloud_url=%s status=%s",
+                    new_id, cloud_url, final_status)
         return serialize_recording(recording, classroom.teacher)
 
 

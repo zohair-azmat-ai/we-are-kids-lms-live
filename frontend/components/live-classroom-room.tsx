@@ -11,7 +11,7 @@ import {
   joinClassPresence,
   leaveClassPresence,
   startRecordingSession,
-  stopRecordingSession,
+  uploadRecording,
   type LiveClassSession,
 } from "@/lib/api";
 import { getAccessToken, isMainTeacherRole, isTeacherRole } from "@/lib/demo-auth";
@@ -32,6 +32,7 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   const [canRetry, setCanRetry] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [isUploadingRecording, setIsUploadingRecording] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
 
   const hasInitializedRef = useRef(false);
@@ -39,6 +40,9 @@ export function LiveClassroomRoom({ classId, role }: Props) {
   const recordingIdRef = useRef<string | null>(null);
   const presenceJoinedRef = useRef(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
 
   const isTeacher = user ? isTeacherRole(user.role) : role === "teacher";
   const isMainTeacher = user ? isMainTeacherRole(user.role) : false;
@@ -211,20 +215,109 @@ export function LiveClassroomRoom({ classId, role }: Props) {
 
   async function handleToggleRecording() {
     if (!session || !user) return;
+
     if (!isRecording) {
+      // ── START RECORDING ────────────────────────────────────────────
+      console.log("[Recording] Starting recording for class:", classId);
+
+      // 1. Request screen capture (hints to share the current browser tab)
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { displaySurface: "browser" } as MediaTrackConstraints,
+          audio: true,
+        });
+      } catch (err) {
+        console.warn("[Recording] getDisplayMedia denied or unsupported:", err);
+        return;
+      }
+      mediaStreamRef.current = stream;
+      recordedChunksRef.current = [];
+
+      // 2. Create DB entry first so recording is visible immediately
+      let recordingId: string;
       try {
         const result = await startRecordingSession({ classId, title: session.title });
-        recordingIdRef.current = result.recording_id;
-        setIsRecording(true);
-      } catch { /* non-fatal */ }
-    } else {
-      try {
-        if (recordingIdRef.current) {
-          await stopRecordingSession({ recordingId: recordingIdRef.current });
-        }
+        recordingId = result.recording_id;
+        recordingIdRef.current = recordingId;
+        console.log("[Recording] Recording started — id:", recordingId);
+      } catch (err) {
+        console.error("[Recording] Failed to create DB entry:", err);
+        stream.getTracks().forEach((t) => t.stop());
+        mediaStreamRef.current = null;
+        return;
+      }
+
+      // 3. Start MediaRecorder
+      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+        ? "video/webm;codecs=vp9,opus"
+        : MediaRecorder.isTypeSupported("video/webm")
+          ? "video/webm"
+          : "";
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        console.log("[Recording] MediaRecorder stopped — uploading...");
+        const chunks = recordedChunksRef.current;
+        const id = recordingIdRef.current;
+        const sess = session;
+        const usr = user;
+
+        // Stop all tracks
+        mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+        mediaStreamRef.current = null;
+
         setIsRecording(false);
-        recordingIdRef.current = null;
-      } catch { /* non-fatal */ }
+        setIsUploadingRecording(true);
+
+        try {
+          if (chunks.length === 0 || !id) {
+            console.warn("[Recording] No chunks recorded or missing id — skipping upload.");
+            return;
+          }
+          const blob = new Blob(chunks, { type: mimeType || "video/webm" });
+          const file = new File([blob], `recording-${id}.webm`, { type: blob.type });
+          console.log("[Recording] Uploading blob — size:", blob.size, "bytes, recording_id:", id);
+
+          const result = await uploadRecording({
+            classId,
+            teacherName: usr.name,
+            title: sess?.title ?? "Class Recording",
+            file,
+            recordingId: id,
+          });
+          console.log("[Recording] Upload complete — cloud_url:", result.cloud_url, "status:", result.status);
+          recordingIdRef.current = null;
+          recordedChunksRef.current = [];
+        } catch (err) {
+          console.error("[Recording] Upload failed:", err);
+        } finally {
+          setIsUploadingRecording(false);
+        }
+      };
+
+      // If the user stops sharing via the browser's native stop button, clean up
+      stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+        if (mediaRecorderRef.current?.state === "recording") {
+          mediaRecorderRef.current.stop();
+        }
+      });
+
+      recorder.start(5000); // collect chunks every 5 s
+      setIsRecording(true);
+    } else {
+      // ── STOP RECORDING ─────────────────────────────────────────────
+      console.log("[Recording] Stopping recording...");
+      if (mediaRecorderRef.current?.state === "recording") {
+        mediaRecorderRef.current.stop(); // triggers onstop which handles upload
+      } else {
+        setIsRecording(false);
+      }
     }
   }
 
@@ -259,14 +352,17 @@ export function LiveClassroomRoom({ classId, role }: Props) {
           <button
             type="button"
             onClick={() => void handleToggleRecording()}
+            disabled={isUploadingRecording}
             style={{
               display: "flex", alignItems: "center", gap: 4,
-              padding: "4px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none",
-              background: isRecording ? "#ef4444" : "#334155", color: "#f1f5f9",
+              padding: "4px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600,
+              cursor: isUploadingRecording ? "default" : "pointer", border: "none",
+              background: isUploadingRecording ? "#7c3aed" : isRecording ? "#ef4444" : "#334155",
+              color: "#f1f5f9", opacity: isUploadingRecording ? 0.8 : 1,
             }}
           >
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: isRecording ? "#fff" : "#94a3b8" }} />
-            {isRecording ? "Stop" : "Rec"}
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: isUploadingRecording ? "#c4b5fd" : isRecording ? "#fff" : "#94a3b8" }} />
+            {isUploadingRecording ? "Saving…" : isRecording ? "Stop" : "Rec"}
           </button>
         )}
 
